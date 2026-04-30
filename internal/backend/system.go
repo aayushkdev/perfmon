@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-    "strings"
-    "bytes"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -891,16 +891,16 @@ func (c *Collector) updateProcesses() {
 		if err != nil {
 			continue
 		}
-        // parse /proc/<pid>/stat robustly: comm can contain spaces and is
-        // enclosed in parentheses. We'll extract comm and then split the
-        // remaining fields.
-        utime, stime, rssPages, name, ok := parseProcStat(bs)
-        if !ok {
-            continue
-        }
-        // compute jiffies
-        pj := utime + stime
-        procJiffies[pid] = pj
+		// parse /proc/<pid>/stat robustly: comm can contain spaces and is
+		// enclosed in parentheses. We'll extract comm and then split the
+		// remaining fields.
+		utime, stime, rssPages, name, ok := parseProcStat(bs)
+		if !ok {
+			continue
+		}
+		// compute jiffies
+		pj := utime + stime
+		procJiffies[pid] = pj
 		// compute deltas
 		var cpuPct float64
 		if prevTotal := c.prevTotalJiffies; prevTotal > 0 && totalNow > prevTotal {
@@ -946,31 +946,31 @@ func (c *Collector) updateProcesses() {
 // (process name) is enclosed in parentheses and may contain spaces, so we
 // extract it carefully. Returns (utime, stime, rssPages, name, ok).
 func parseProcStat(raw []byte) (uint64, uint64, uint64, string, bool) {
-    // find the first '(' and last ')' which delimit comm
-    l := bytes.IndexByte(raw, '(')
-    r := bytes.LastIndexByte(raw, ')')
-    if l < 0 || r < 0 || r <= l {
-        return 0, 0, 0, "", false
-    }
-    name := string(raw[l+1 : r])
-    // fields before '(' are pid, after ')' are the rest
-    after := raw[r+1:]
-    fields := strings.Fields(string(after))
-    // according to procfs, utime is field 13, stime 14, rss is 24 relative to
-    // the start of the whole line. After splitting like this, fields[11] is
-    // utime (since fields starts at index 0 corresponding to field 3).
-    // We need to ensure there are enough fields.
-    if len(fields) < 22 { // need at least up to rss
-        return 0, 0, 0, name, false
-    }
-    // utime: fields[11], stime: fields[12], rss: fields[21]
-    utime, err1 := strconv.ParseUint(fields[11], 10, 64)
-    stime, err2 := strconv.ParseUint(fields[12], 10, 64)
-    rssPages, err3 := strconv.ParseUint(fields[21], 10, 64)
-    if err1 != nil || err2 != nil || err3 != nil {
-        return 0, 0, 0, name, false
-    }
-    return utime, stime, rssPages, name, true
+	// find the first '(' and last ')' which delimit comm
+	l := bytes.IndexByte(raw, '(')
+	r := bytes.LastIndexByte(raw, ')')
+	if l < 0 || r < 0 || r <= l {
+		return 0, 0, 0, "", false
+	}
+	name := string(raw[l+1 : r])
+	// fields before '(' are pid, after ')' are the rest
+	after := raw[r+1:]
+	fields := strings.Fields(string(after))
+	// according to procfs, utime is field 13, stime 14, rss is 24 relative to
+	// the start of the whole line. After splitting like this, fields[11] is
+	// utime (since fields starts at index 0 corresponding to field 3).
+	// We need to ensure there are enough fields.
+	if len(fields) < 22 { // need at least up to rss
+		return 0, 0, 0, name, false
+	}
+	// utime: fields[11], stime: fields[12], rss: fields[21]
+	utime, err1 := strconv.ParseUint(fields[11], 10, 64)
+	stime, err2 := strconv.ParseUint(fields[12], 10, 64)
+	rssPages, err3 := strconv.ParseUint(fields[21], 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, name, false
+	}
+	return utime, stime, rssPages, name, true
 }
 
 // readMemoryModules attempts to read memory module count and common speed from
@@ -1267,12 +1267,41 @@ func batteryHealthPercent(base string) *float64 {
 
 func readEnergyWh(base string, names ...string) *float64 {
 	for _, name := range names {
-		if value := readMicroEnergy(filepath.Join(base, name)); value != nil {
-			// value is in microjoules (uJ). Convert to watt-hours:
-			// Wh = (microjoules / 1e6) / 3600 = microjoules / 3.6e9
-			wh := float64(*value) / 1e6 / 3600.0
+		path := filepath.Join(base, name)
+		raw := readString(path)
+		if raw == "" {
+			continue
+		}
+		// parse as float to handle large values reliably
+		v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil {
+			continue
+		}
+		// Common kernel semantics:
+		// - energy_* fields are in micro-watt-hours (uWh)
+		// - charge_* fields are in micro-ampere-hours (uAh)
+		// If we find an energy field, convert uWh -> Wh by dividing by 1e6.
+		// If we find a charge field, convert uAh -> Wh using the battery voltage
+		// (voltage is provided in microvolts in sysfs so readVoltageV already
+		// returns volts).
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "energy") {
+			wh := v / 1e6
 			return &wh
 		}
+		if strings.Contains(lower, "charge") {
+			// need voltage to convert charge (uAh) to Wh: Wh = (uAh / 1e6) * V
+			if volts := readVoltageV(base); volts != nil && *volts > 0 {
+				wh := (v / 1e6) * (*volts)
+				return &wh
+			}
+			// If voltage is unavailable, fall back to returning nil so callers
+			// know the value is unreliable.
+			return nil
+		}
+		// Unknown field name: treat as micro-watt-hours by default
+		wh := v / 1e6
+		return &wh
 	}
 	return nil
 }

@@ -463,6 +463,9 @@ func (a *App) controlLegend(s model.Snapshot) string {
 		}
 		parts = append(parts, "[#7dd3fc]m[-] mode")
 		parts = append(parts, "[#7dd3fc]o[-] core")
+		// UI-side controls
+		parts = append(parts, "[#7dd3fc]p[-] toggle cores/procs")
+		parts = append(parts, "[#7dd3fc]c[-] cycle proc sort")
 	}
 	parts = append(parts, "[#7dd3fc]r[-] refresh", "[#7dd3fc]q[-] quit")
 	return "[#94a3b8]" + strings.Join(parts, "  ") + "[-]"
