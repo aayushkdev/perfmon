@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,12 +25,16 @@ type App struct {
 	header       *tview.TextView
 	cpuPanel     *tview.TextView
 	coreTable    *tview.Table
+	processTable *tview.Table
+	middlePages  *tview.Pages
 	memoryPanel  *tview.TextView
 	thermalPanel *tview.TextView
 	batteryPanel *tview.TextView
 	gpuPanel     *tview.TextView
 	status       *tview.TextView
 	last         model.Snapshot
+	activeMiddle string // "cores" or "procs"
+	procSort     string // "mem", "cpu", "pid", "name"
 }
 
 func NewApp(collector backend.SnapshotCollector, interval time.Duration) *App {
@@ -38,6 +43,7 @@ func NewApp(collector backend.SnapshotCollector, interval time.Duration) *App {
 		interval:  interval,
 		app:       tview.NewApplication(),
 		pages:     tview.NewPages(),
+		procSort:  "mem",
 	}
 	if controls, ok := collector.(backend.CoreController); ok {
 		a.controls = controls
@@ -51,6 +57,15 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Always prioritize explicit Ctrl+C (or Ctrl+c) to exit the program.
+		if (event.Modifiers() & tcell.ModCtrl) != 0 {
+			// If Ctrl is held and the rune is 'c' or 'C', treat as quit.
+			if event.Rune() == 'c' || event.Rune() == 'C' || event.Key() == tcell.KeyCtrlC {
+				cancel()
+				a.app.Stop()
+				return nil
+			}
+		}
 		switch event.Rune() {
 		case 'q', 'Q':
 			cancel()
@@ -62,6 +77,18 @@ func (a *App) Run(ctx context.Context) error {
 		case 'g', 'G':
 			a.chooseGovernor(ctx)
 			return nil
+		case 'p', 'P':
+			// toggle between cores and processes
+			if a.activeMiddle == "cores" {
+				a.switchMiddle("procs")
+			} else {
+				a.switchMiddle("cores")
+			}
+			return nil
+		case 'c', 'C':
+			// cycle process sort order (mem -> cpu -> pid -> name)
+			a.cycleProcSort()
+			return nil
 		case 'e', 'E':
 			a.chooseEPP(ctx)
 			return nil
@@ -69,13 +96,14 @@ func (a *App) Run(ctx context.Context) error {
 			a.choosePowerProfile(ctx)
 			return nil
 		case 't', 'T':
+			// 't' toggles turbo (accept uppercase too)
 			a.toggleTurbo(ctx)
 			return nil
 		case 'o', 'O':
 			a.toggleSelectedCore(ctx)
 			return nil
 		}
-		if event.Key() == tcell.KeyEsc || event.Key() == tcell.KeyCtrlC {
+		if event.Key() == tcell.KeyEsc {
 			cancel()
 			a.app.Stop()
 			return nil
@@ -86,6 +114,22 @@ func (a *App) Run(ctx context.Context) error {
 	a.initialRender(ctx)
 	go a.poll(ctx)
 	return a.app.SetRoot(a.pages, true).EnableMouse(true).Run()
+}
+
+func (a *App) switchMiddle(name string) {
+	if name == a.activeMiddle {
+		return
+	}
+	switch name {
+	case "cores":
+		a.middlePages.ShowPage("cores")
+		a.middlePages.HidePage("procs")
+		a.activeMiddle = "cores"
+	case "procs":
+		a.middlePages.ShowPage("procs")
+		a.middlePages.HidePage("cores")
+		a.activeMiddle = "procs"
+	}
 }
 
 func (a *App) build() {
@@ -107,13 +151,19 @@ func (a *App) build() {
 	a.status = textPanel("", false)
 
 	a.coreTable = tablePanel("Cores")
+	a.processTable = tablePanel("Processes")
+	// processTable placeholder will be populated when rendering
+	a.middlePages = tview.NewPages()
+	a.middlePages.AddPage("cores", a.coreTable, true, true)
+	a.middlePages.AddPage("procs", a.processTable, true, false)
+	a.activeMiddle = "cores"
 	a.root = tview.NewGrid().
 		SetRows(3, 0, 9, 2).
 		SetColumns(32, 0, 32).
 		SetBorders(false).
 		AddItem(a.header, 0, 0, 1, 3, 0, 0, false).
 		AddItem(a.cpuPanel, 1, 0, 1, 1, 0, 0, false).
-		AddItem(a.coreTable, 1, 1, 1, 1, 0, 0, true).
+		AddItem(a.middlePages, 1, 1, 1, 1, 0, 0, true).
 		AddItem(a.memoryPanel, 1, 2, 1, 1, 0, 0, false).
 		AddItem(a.gpuPanel, 2, 0, 1, 1, 0, 0, false).
 		AddItem(a.thermalPanel, 2, 1, 1, 1, 0, 0, false).
@@ -185,19 +235,87 @@ func (a *App) initialRender(ctx context.Context) {
 
 func (a *App) render(s model.Snapshot) {
 	a.last = s
+	// Include overall CPU% and memory used (GiB) in the header for quick glance.
+	cpuPct := fmt.Sprintf("%.1f%%", s.CPU.UsagePercent)
+	memUsed := bytesGB(s.Memory.UsedBytes)
 	a.header.SetText(fmt.Sprintf(
-		"[#7dd3fc::b]perfmon[-:-:-]  [#94a3b8]kernel %s  arch %s  updated %s[-]",
+		"[#7dd3fc::b]perfmon[-:-:-]  [#94a3b8]kernel %s  arch %s  cpu %s  mem %s  updated %s[-]",
 		fallback(s.Host.Kernel, "unknown"),
 		fallback(s.Host.Architecture, "unknown"),
+		cpuPct,
+		memUsed,
 		s.Timestamp.Format("15:04:05"),
 	))
 	a.cpuPanel.SetText(renderCPU(s.CPU))
 	a.renderCores(s.CPU.Cores)
+	a.renderProcesses(s)
 	a.memoryPanel.SetText(renderMemory(s.Memory))
 	a.thermalPanel.SetText(renderThermals(s))
 	a.batteryPanel.SetText(renderBattery(s))
 	a.gpuPanel.SetText(renderGPU(s.GPUs))
 	a.renderFooter(s, "[#64748b]Select a core row, then use the key actions in the footer. Writes go through /sys and may require privileges.[-]")
+}
+
+// renderProcesses populates the processTable. Right now it's a stub that
+// shows a placeholder unless the collector implements a ProcessLister.
+func (a *App) renderProcesses(s model.Snapshot) {
+	a.processTable.Clear()
+	headers := []string{"PID", "Name", "CPU%", "MEM"}
+	for col, h := range headers {
+		a.processTable.SetCell(0, col, cell(h, palette.accent, true))
+	}
+	procs := s.Processes
+	// If snapshot didn't include processes, try the collector directly as a
+	// fallback (Collector provides Processes()). This helps if Snapshot
+	// failed to populate processes for any reason.
+	if len(procs) == 0 {
+		if pl, ok := a.collector.(interface{ Processes() []model.Process }); ok {
+			procs = pl.Processes()
+		}
+	}
+	if len(procs) == 0 {
+		a.processTable.SetCell(1, 0, cell("No process data available.", palette.muted, false))
+		return
+	}
+	// show up to 50 processes
+	max := 50
+	if len(procs) < max {
+		max = len(procs)
+	}
+	// Apply UI-side sorting based on a.procSort if present. The backend
+	// already sorts by memory desc by default, but allow cycling.
+	switch a.procSort {
+	case "mem":
+		// backend already sorted by mem desc
+	case "cpu":
+		sort.Slice(procs, func(i, j int) bool { return procs[i].CPUPercent > procs[j].CPUPercent })
+	case "pid":
+		sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
+	case "name":
+		sort.Slice(procs, func(i, j int) bool { return strings.ToLower(procs[i].Name) < strings.ToLower(procs[j].Name) })
+	}
+
+	for i := 0; i < max; i++ {
+		p := procs[i]
+		r := i + 1
+		a.processTable.SetCell(r, 0, cell(fmt.Sprintf("%d", p.PID), palette.text, false))
+		a.processTable.SetCell(r, 1, cell(fallback(p.Name, "-"), palette.muted, false))
+		a.processTable.SetCell(r, 2, cell(fmt.Sprintf("%.1f", p.CPUPercent), palette.text, false))
+		a.processTable.SetCell(r, 3, cell(bytes(p.RSSBytes), palette.text, false))
+	}
+}
+
+func (a *App) cycleProcSort() {
+	switch a.procSort {
+	case "mem":
+		a.procSort = "cpu"
+	case "cpu":
+		a.procSort = "pid"
+	case "pid":
+		a.procSort = "name"
+	default:
+		a.procSort = "mem"
+	}
 }
 
 func (a *App) toggleSelectedCore(ctx context.Context) {
@@ -504,19 +622,59 @@ func plural(count int) string {
 }
 
 func renderCPU(cpu model.CPU) string {
+	// Shorten the model string for compact display
+	short := shortCPUName(fallback(cpu.Model, "CPU"))
+	// compute average frequency across cores with known frequency
+	var sum int
+	var count int
+	for _, c := range cpu.Cores {
+		if c.FrequencyMHz > 0 {
+			sum += c.FrequencyMHz
+			count++
+		}
+	}
+	avgFreq := 0
+	if count > 0 {
+		avgFreq = sum / count
+	}
+
+	// Show summary top: cores, freq, temp, power (if present), then usage.
 	lines := []string{
-		fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(cpu.Model, "CPU")),
-		fmt.Sprintf("[#94a3b8]vendor[-] %s", fallback(cpu.Vendor, "unknown")),
-		fmt.Sprintf("[#94a3b8]driver[-] %s", fallback(cpu.Driver, "unknown")),
-		fmt.Sprintf("[#94a3b8]usage [-] %s %5.1f%%", bar(cpu.UsagePercent, 14), cpu.UsagePercent),
+		fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", short),
 		fmt.Sprintf("[#94a3b8]cores [-] %d online / %d total", onlineCores(cpu.Cores), len(cpu.Cores)),
+		fmt.Sprintf("[#94a3b8]freq [-] %s", freq(avgFreq)),
+		fmt.Sprintf("[#94a3b8]temp [-] %s", floatPtr(cpu.TemperatureC, "C")),
+	}
+	if cpu.PowerW != nil {
+		lines = append(lines, fmt.Sprintf("[#94a3b8]power[-] %s", floatPtr(cpu.PowerW, "W")))
+	}
+	lines = append(lines,
+		fmt.Sprintf("[#94a3b8]usage [-] %s %5.1f%%", bar(cpu.UsagePercent, 14), cpu.UsagePercent),
 		fmt.Sprintf("[#94a3b8]hybrid[-] %s", yesNo(cpu.HybridKnown && cpu.Hybrid)),
 		fmt.Sprintf("[#94a3b8]mode[-] %s", fallback(cpu.PowerProfile, "unavailable")),
 		fmt.Sprintf("[#94a3b8]governor[-] %s", fallback(cpu.ActiveGov, "unavailable")),
 		fmt.Sprintf("[#94a3b8]epp   [-] %s", fallback(cpu.EPP, "unavailable")),
 		fmt.Sprintf("[#94a3b8]turbo [-] %s", boolPtr(cpu.TurboEnabled)),
-	}
+	)
 	return strings.Join(lines, "\n")
+}
+
+// shortCPUName returns a compact display name for a CPU model string by
+// removing vendor marketing suffixes like "with ... Graphics" and trimming
+// excessive whitespace.
+func shortCPUName(in string) string {
+	// remove common segments that refer to integrated graphics
+	markers := []string{" with ", " with Integrated Graphics", " Graphics", " GPU"}
+	out := in
+	for _, m := range markers {
+		if idx := strings.Index(strings.ToLower(out), strings.ToLower(m)); idx >= 0 {
+			out = strings.TrimSpace(out[:idx])
+			break
+		}
+	}
+	// collapse multiple spaces
+	out = strings.Join(strings.Fields(out), " ")
+	return out
 }
 
 func (a *App) renderCores(cores []model.CPUCore) {
@@ -569,53 +727,24 @@ func renderMemory(mem model.Memory) string {
 	lines = append(lines,
 		"",
 		fmt.Sprintf("[#94a3b8]usage [-] %s %5.1f%%", bar(usedPct, 14), usedPct),
-		fmt.Sprintf("[#e2e8f0]%s[-] used", bytes(mem.UsedBytes)),
-		fmt.Sprintf("[#94a3b8]%s available of %s[-]", bytes(mem.AvailableBytes), bytes(mem.TotalBytes)),
+		fmt.Sprintf("[#e2e8f0]%s[-] used of %s", bytes(mem.UsedBytes), bytes(mem.TotalBytes)),
 		"",
 		fmt.Sprintf("[#94a3b8]swap [-] %s %5.1f%%", bar(swapPct, 14), swapPct),
 		fmt.Sprintf("[#e2e8f0]%s[-] used of %s", bytes(mem.SwapUsedBytes), bytes(mem.SwapTotalBytes)),
 		"",
 	)
-	if mem.PressureSome != nil || mem.PressureFull != nil {
-		// Only show PSI lines when at least one value exists.
-		lines = append(lines,
-			fmt.Sprintf("[#94a3b8]psi some[-] %s", floatPtr(mem.PressureSome, "%")),
-			fmt.Sprintf("[#94a3b8]psi full[-] %s", floatPtr(mem.PressureFull, "%")),
-		)
-	}
+	// PSI removed: no pressure information displayed.
 	return strings.Join(lines, "\n")
 }
 
 func renderThermals(s model.Snapshot) string {
-	if len(s.Thermals) == 0 && len(s.Power) == 0 {
-		return "[#94a3b8]No thermal or powercap telemetry detected.[-]\n\n[#64748b]RAPL, hwmon, and thermal zones are used when the kernel exposes them.[-]"
+	if len(s.Thermals) == 0 {
+		return "[#94a3b8]No thermal sensors detected.[-]\n\n[#64748b]Thermal zones (hwmon/thermal) are used when the kernel exposes them.[-]"
 	}
-	lines := make([]string, 0, 14)
+	lines := make([]string, 0, len(s.Thermals)+1)
 	lines = append(lines, "[#e2e8f0::b]Thermals[-:-:-]")
-	lines = append(lines, fmt.Sprintf("[#94a3b8]pkg[-] %d  [#94a3b8]thermal[-] %d", len(s.Power), len(s.Thermals)))
-	if len(s.Power) > 0 {
-		lines = append(lines, "")
-		for _, domain := range s.Power {
-			lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s  [#94a3b8]lim[-] %s  [#94a3b8]eng[-] %s",
-				domain.Name,
-				powerValue(domain.PowerW, "W"),
-				powerValue(domain.LimitW, "W"),
-				floatPtr(domain.EnergyJ, "J"),
-			))
-		}
-	}
-	if len(s.Thermals) > 0 {
-		lines = append(lines, "")
-		for _, sensor := range s.Thermals {
-			lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s  [#94a3b8]src[-] %s  [#94a3b8]max[-] %s  [#94a3b8]crit[-] %s  [#94a3b8]thr[-] %s",
-				sensor.Name,
-				floatPtr(sensor.TemperatureC, "C"),
-				fallback(sensor.Source, "sensor"),
-				floatPtr(sensor.MaxC, "C"),
-				floatPtr(sensor.CriticalC, "C"),
-				boolPtr(sensor.Throttled),
-			))
-		}
+	for _, sensor := range s.Thermals {
+		lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s", sensor.Name, floatPtr(sensor.TemperatureC, "C")))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -649,11 +778,11 @@ func renderGPU(gpus []model.GPU) string {
 	if len(gpus) == 0 {
 		return "[#94a3b8]No DRM GPU devices detected.[-]\n\n[#64748b]AMD/Intel metrics can be added through DRM/hwmon backends; NVIDIA can use an optional nvidia-smi backend.[-]"
 	}
-	lines := make([]string, 0, len(gpus)*3)
+	lines := make([]string, 0, len(gpus)*2)
 	for _, gpu := range gpus {
+		// First line: show the product name if available, otherwise the vendor.
 		lines = append(lines,
-			fmt.Sprintf("[#e2e8f0::b]%s[-:-:-] [#94a3b8]%s[-]", gpu.ID, gpu.Vendor),
-			fmt.Sprintf("[#94a3b8]name [-] %s", fallback(gpu.Name, "driver device")),
+			fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)),
 			fmt.Sprintf("[#94a3b8]temp [-] %s   [#94a3b8]power[-] %s", floatPtr(gpu.TemperatureC, "C"), floatPtr(gpu.PowerW, "W")),
 		)
 	}
@@ -780,6 +909,12 @@ func bytes(v uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(v)/float64(div), "KMGTPE"[exp])
+}
+
+// bytesGB formats bytes as GiB with one decimal place (e.g., "3.2 GiB").
+func bytesGB(v uint64) string {
+	gib := float64(v) / 1024.0 / 1024.0 / 1024.0
+	return fmt.Sprintf("%.1f GiB", gib)
 }
 
 func onlineCores(cores []model.CPUCore) int {

@@ -11,6 +11,7 @@ type Snapshot struct {
 	Batteries    []Battery
 	ACOnline     *bool
 	GPUs         []GPU
+	Processes    []Process
 	Memory       Memory
 	Capabilities []Capability
 	Warnings     []string
@@ -88,6 +89,17 @@ type GPU struct {
 	PowerW       *float64
 }
 
+// Process describes a single process snapshot used by the optional process
+// lister UI. Fields are intentionally minimal to keep the model small.
+type Process struct {
+	PID        int
+	Name       string
+	Cmdline    string
+	CPUPercent float64
+	MemPercent float64
+	RSSBytes   uint64
+}
+
 type ThermalSensor struct {
 	Name         string
 	Source       string
@@ -126,8 +138,6 @@ type Memory struct {
 	AvailableBytes uint64
 	SwapTotalBytes uint64
 	SwapUsedBytes  uint64
-	PressureSome   *float64
-	PressureFull   *float64
 	// ModuleCount is the number of detected memory modules (DIMMs). May be nil
 	// if the collector could not determine the value on this system.
 	ModuleCount *int
