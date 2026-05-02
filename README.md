@@ -12,10 +12,17 @@ perfmon is a terminal-based system performance monitor and control utility for L
 Requirements:
 - Go 1.20+ (module-enabled)
 
-Build:
+Install with `go install`:
 
 ```bash
-cd /path/to/perfmon
+go install github.com/aayushkdev/perfmon/cmd/perfmon@latest
+```
+
+Build from source:
+
+```bash
+git clone https://github.com/aayushkdev/perfmon.git
+cd perfmon
 go build -o perfmon ./cmd/perfmon
 ```
 
@@ -25,7 +32,7 @@ Run (recommended without writable controls):
 ./perfmon
 ```
 
-Run with writable controls (may require root privileges):
+Run with writable controls (turbo, toggling cores, power profiles requires root privileges):
 
 ```bash
 sudo ./perfmon
