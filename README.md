@@ -43,7 +43,7 @@ Controls (keyboard)
 - `r`: refresh
 - `g`: cycle CPU governor
 - `p`: toggle between cores and processes view
-- `c`: cycle process sort order (mem → cpu → pid → name)
+- `c`: cycle process sort order (pid → name → cpu → mem)
 - `s`: toggle ascending/descending for the current process sort column
 - `e`: cycle EPP (energy-performance preference)
 - `m`: cycle power profile (powersave / balanced / performance)
