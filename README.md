@@ -45,6 +45,8 @@ Controls (keyboard)
 - `p`: toggle between cores and processes view
 - `c`: cycle process sort order (pid → name → cpu → mem)
 - `s`: toggle ascending/descending for the current process sort column
+- `k`: send SIGTERM to the selected process (processes view)
+- `K`: send SIGKILL to the selected process (processes view)
 - `e`: cycle EPP (energy-performance preference)
 - `m`: cycle power profile (powersave / balanced / performance)
 - `t`: toggle turbo
