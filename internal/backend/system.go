@@ -933,10 +933,6 @@ func (c *Collector) updateProcesses() {
 	}
 	// sort by memory (RSS) desc by default
 	sort.Slice(procs, func(i, j int) bool { return procs[i].RSSBytes > procs[j].RSSBytes })
-	// trim to 200 entries to keep memory bounded
-	if len(procs) > 200 {
-		procs = procs[:200]
-	}
 	c.processes = procs
 	c.prevProcJiffies = procJiffies
 	c.prevTotalJiffies = totalNow
