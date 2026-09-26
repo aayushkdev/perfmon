@@ -87,7 +87,7 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			return nil
 		case 'c', 'C':
-			// cycle process sort order (mem -> cpu -> pid -> name)
+			// cycle process sort order (pid -> name -> cpu -> mem)
 			a.cycleProcSort()
 			return nil
 		case 's', 'S':
@@ -338,14 +338,14 @@ func (a *App) renderProcesses(s model.Snapshot) {
 
 func (a *App) cycleProcSort() {
 	switch a.procSort {
-	case "mem":
-		a.procSort = "cpu"
-	case "cpu":
-		a.procSort = "pid"
 	case "pid":
 		a.procSort = "name"
-	default:
+	case "name":
+		a.procSort = "cpu"
+	case "cpu":
 		a.procSort = "mem"
+	default:
+		a.procSort = "pid"
 	}
 	// Every column defaults to descending; press 's' to flip.
 	a.procSortAsc = false
