@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -33,10 +35,15 @@ type App struct {
 	gpuPanel     *tview.TextView
 	status       *tview.TextView
 	last         model.Snapshot
-	activeMiddle string // "cores" or "procs"
-	procSort     string // "mem", "cpu", "pid", "name"
-	procSortAsc  bool   // sort ascending when true, descending when false
+	activeMiddle string          // "cores" or "procs"
+	procSort     string          // "mem", "cpu", "pid", "name"
+	procSortAsc  bool            // sort ascending when true, descending when false
+	procList     []model.Process // processes in the order currently displayed
+	flashMsg     string          // transient footer message (e.g. signal result)
+	flashUntil   time.Time       // when flashMsg should yield to the default hint
 }
+
+const footerHint = "[#64748b]Select a core row, then use the key actions in the footer. Writes go through /sys and may require privileges.[-]"
 
 func NewApp(collector backend.SnapshotCollector, interval time.Duration) *App {
 	a := &App{
@@ -79,20 +86,35 @@ func (a *App) Run(ctx context.Context) error {
 			a.chooseGovernor(ctx)
 			return nil
 		case 'p', 'P':
-			// toggle between cores and processes
+			// toggle between cores and processes, then refresh immediately
 			if a.activeMiddle == "cores" {
 				a.switchMiddle("procs")
 			} else {
 				a.switchMiddle("cores")
 			}
+			go a.refresh(ctx)
 			return nil
 		case 'c', 'C':
 			// cycle process sort order (pid -> name -> cpu -> mem)
-			a.cycleProcSort()
+			if a.activeMiddle == "procs" {
+				a.cycleProcSort()
+				go a.refresh(ctx)
+			}
 			return nil
 		case 's', 'S':
 			// toggle ascending/descending for the current sort column
-			a.toggleProcSortDir()
+			if a.activeMiddle == "procs" {
+				a.toggleProcSortDir()
+				go a.refresh(ctx)
+			}
+			return nil
+		case 'k':
+			// terminate the selected process (SIGTERM)
+			a.signalSelectedProcess(syscall.SIGTERM)
+			return nil
+		case 'K':
+			// force-kill the selected process (SIGKILL)
+			a.signalSelectedProcess(syscall.SIGKILL)
 			return nil
 		case 'e', 'E':
 			a.chooseEPP(ctx)
@@ -222,7 +244,7 @@ func (a *App) refresh(ctx context.Context) {
 	snap, err := a.collector.Snapshot(ctx)
 	a.app.QueueUpdateDraw(func() {
 		if err != nil {
-			a.status.SetText(fmt.Sprintf("[red]collector error:[white] %v", err))
+			a.flashFooter(fmt.Sprintf("[#ef4444]collector error: %v[-]", err))
 			return
 		}
 		a.render(snap)
@@ -232,7 +254,7 @@ func (a *App) refresh(ctx context.Context) {
 func (a *App) initialRender(ctx context.Context) {
 	snap, err := a.collector.Snapshot(ctx)
 	if err != nil {
-		a.status.SetText(fmt.Sprintf("[red]collector error:[white] %v", err))
+		a.flashFooter(fmt.Sprintf("[#ef4444]collector error: %v[-]", err))
 		return
 	}
 	a.render(snap)
@@ -258,13 +280,18 @@ func (a *App) render(s model.Snapshot) {
 	a.thermalPanel.SetText(renderThermals(s))
 	a.batteryPanel.SetText(renderBattery(s))
 	a.gpuPanel.SetText(renderGPU(s.GPUs))
-	a.renderFooter(s, "[#64748b]Select a core row, then use the key actions in the footer. Writes go through /sys and may require privileges.[-]")
+	msg := footerHint
+	if !a.flashUntil.IsZero() && time.Now().Before(a.flashUntil) {
+		msg = a.flashMsg
+	}
+	a.renderFooter(s, msg)
 }
 
 // renderProcesses populates the processTable. Right now it's a stub that
 // shows a placeholder unless the collector implements a ProcessLister.
 func (a *App) renderProcesses(s model.Snapshot) {
 	a.processTable.Clear()
+	a.procList = nil
 	headers := []string{"PID", "Name", "CPU%", "MEM"}
 	sortKeys := []string{"pid", "name", "cpu", "mem"}
 	for col, h := range headers {
@@ -334,6 +361,7 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		a.processTable.SetCell(r, 2, cell(fmt.Sprintf("%.1f", p.CPUPercent), palette.text, false))
 		a.processTable.SetCell(r, 3, cell(bytes(p.RSSBytes), palette.text, false))
 	}
+	a.procList = procs
 }
 
 func (a *App) cycleProcSort() {
@@ -355,14 +383,47 @@ func (a *App) toggleProcSortDir() {
 	a.procSortAsc = !a.procSortAsc
 }
 
+func (a *App) signalSelectedProcess(sig syscall.Signal) {
+	if a.activeMiddle != "procs" {
+		return
+	}
+	row, _ := a.processTable.GetSelection()
+	if row <= 0 || row-1 >= len(a.procList) {
+		a.flashFooter("[#f59e0b]Select a process row first.[-]")
+		return
+	}
+	p := a.procList[row-1]
+	if p.PID <= 1 || p.PID == os.Getpid() {
+		a.flashFooter(fmt.Sprintf("[#f59e0b]Refusing to signal protected PID %d.[-]", p.PID))
+		return
+	}
+	name := fallback(p.Name, "-")
+	if err := syscall.Kill(p.PID, sig); err != nil {
+		a.flashFooter(fmt.Sprintf("[#ef4444]Failed to signal %d (%s): %v[-]", p.PID, name, err))
+		return
+	}
+	a.flashFooter(fmt.Sprintf("[#22c55e]Sent %s to %d (%s).[-]", signalName(sig), p.PID, name))
+}
+
+func signalName(sig syscall.Signal) string {
+	switch sig {
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	default:
+		return sig.String()
+	}
+}
+
 func (a *App) toggleSelectedCore(ctx context.Context) {
 	if a.controls == nil {
-		a.status.SetText("[#f59e0b]Core online control is not supported by this collector.[-]")
+		a.flashFooter("[#f59e0b]Core online control is not supported by this collector.[-]")
 		return
 	}
 	row, _ := a.coreTable.GetSelection()
 	if row <= 0 || row-1 >= len(a.last.CPU.Cores) {
-		a.status.SetText("[#f59e0b]Select a core row first.[-]")
+		a.flashFooter("[#f59e0b]Select a core row first.[-]")
 		return
 	}
 	core := a.last.CPU.Cores[row-1]
@@ -372,7 +433,7 @@ func (a *App) toggleSelectedCore(ctx context.Context) {
 		action = "offline"
 	}
 	if !a.controls.CanSetCoreOnline(core.ID) {
-		a.status.SetText(fmt.Sprintf("[#f59e0b]Core %d cannot be toggled on this system.[-]", core.ID))
+		a.flashFooter(fmt.Sprintf("[#f59e0b]Core %d cannot be toggled on this system.[-]", core.ID))
 		return
 	}
 	go a.applyControl(ctx, fmt.Sprintf("core %d %s", core.ID, action), func(runCtx context.Context) error {
@@ -382,7 +443,7 @@ func (a *App) toggleSelectedCore(ctx context.Context) {
 
 func (a *App) toggleTurbo(ctx context.Context) {
 	if a.controls == nil {
-		a.status.SetText("[#f59e0b]Turbo control is not supported by this collector.[-]")
+		a.flashFooter("[#f59e0b]Turbo control is not supported by this collector.[-]")
 		return
 	}
 	enabled := a.last.CPU.TurboEnabled != nil && *a.last.CPU.TurboEnabled
@@ -394,11 +455,11 @@ func (a *App) toggleTurbo(ctx context.Context) {
 
 func (a *App) chooseGovernor(ctx context.Context) {
 	if a.controls == nil {
-		a.status.SetText("[#f59e0b]Governor control is not supported by this collector.[-]")
+		a.flashFooter("[#f59e0b]Governor control is not supported by this collector.[-]")
 		return
 	}
 	if len(a.last.CPU.Governors) == 0 {
-		a.status.SetText("[#f59e0b]No governors detected on this system.[-]")
+		a.flashFooter("[#f59e0b]No governors detected on this system.[-]")
 		return
 	}
 	choice := nextValue(a.last.CPU.ActiveGov, a.last.CPU.Governors)
@@ -409,7 +470,7 @@ func (a *App) chooseGovernor(ctx context.Context) {
 
 func (a *App) chooseEPP(ctx context.Context) {
 	if a.controls == nil {
-		a.status.SetText("[#f59e0b]EPP control is not supported by this collector.[-]")
+		a.flashFooter("[#f59e0b]EPP control is not supported by this collector.[-]")
 		return
 	}
 	options := a.last.CPU.EPPChoices
@@ -424,7 +485,7 @@ func (a *App) chooseEPP(ctx context.Context) {
 
 func (a *App) choosePowerProfile(ctx context.Context) {
 	if a.controls == nil {
-		a.status.SetText("[#f59e0b]Power profile control is not supported by this collector.[-]")
+		a.flashFooter("[#f59e0b]Power profile control is not supported by this collector.[-]")
 		return
 	}
 	choice := nextValue(a.last.CPU.PowerProfile, []string{"powersave", "balanced", "performance"})
@@ -437,14 +498,14 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 	err := fn(ctx)
 	if err != nil {
 		a.app.QueueUpdateDraw(func() {
-			a.renderFooter(a.last, fmt.Sprintf("[#ef4444]Failed to set %s: %v[-]", label, err))
+			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to set %s: %v[-]", label, err))
 		})
 		return
 	}
 	a.app.QueueUpdateDraw(func() {
-		a.renderFooter(a.last, fmt.Sprintf("[#22c55e]Set %s.[-]", label))
+		a.flashFooter(fmt.Sprintf("[#22c55e]Set %s.[-]", label))
 	})
-	a.initialRender(ctx)
+	a.refresh(ctx)
 }
 
 func nextValue(current string, options []string) string {
@@ -478,34 +539,46 @@ func coreTypeLabel(core model.CPUCore) string {
 }
 
 func (a *App) renderFooter(s model.Snapshot, message string) {
-	legend := a.controlLegend(s)
 	if message == "" {
-		a.status.SetText(legend)
-		return
+		message = footerHint
 	}
-	a.status.SetText(message + "\n" + legend)
+	a.status.SetText(message + "\n" + a.controlLegend(s))
+}
+
+// flashFooter shows a transient status message above the legend for two
+// seconds before render reverts to the default hint.
+func (a *App) flashFooter(message string) {
+	a.flashMsg = message
+	a.flashUntil = time.Now().Add(2 * time.Second)
+	a.renderFooter(a.last, message)
 }
 
 func (a *App) controlLegend(s model.Snapshot) string {
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 8)
+	key := func(k, label string) string { return "[#7dd3fc]" + k + "[-] " + label }
 	if a.controls != nil {
 		if capabilityEnabled(s, "CPU governor") {
-			parts = append(parts, "[#7dd3fc]g[-] governor")
+			parts = append(parts, key("g", "governor"))
 		}
 		if capabilityEnabled(s, "CPU EPP") {
-			parts = append(parts, "[#7dd3fc]e[-] epp")
+			parts = append(parts, key("e", "epp"))
 		}
 		if capabilityEnabled(s, "CPU turbo") {
-			parts = append(parts, "[#7dd3fc]t[-] turbo")
+			parts = append(parts, key("t", "turbo"))
 		}
-		parts = append(parts, "[#7dd3fc]m[-] mode")
-		parts = append(parts, "[#7dd3fc]o[-] core")
-		// UI-side controls
-		parts = append(parts, "[#7dd3fc]p[-] toggle cores/procs")
-		parts = append(parts, "[#7dd3fc]c[-] cycle proc sort")
-		parts = append(parts, "[#7dd3fc]s[-] sort dir")
+		parts = append(parts, key("m", "mode"))
 	}
-	parts = append(parts, "[#7dd3fc]r[-] refresh", "[#7dd3fc]q[-] quit")
+	// Mode-specific controls: only advertise what the active view responds to.
+	if a.activeMiddle == "procs" {
+		parts = append(parts, key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"))
+		parts = append(parts, key("p", "cores"))
+	} else {
+		if a.controls != nil {
+			parts = append(parts, key("o", "core"))
+		}
+		parts = append(parts, key("p", "processes"))
+	}
+	parts = append(parts, key("r", "refresh"), key("q", "quit"))
 	return "[#94a3b8]" + strings.Join(parts, "  ") + "[-]"
 }
 
