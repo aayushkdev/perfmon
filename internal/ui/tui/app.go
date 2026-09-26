@@ -35,6 +35,7 @@ type App struct {
 	last         model.Snapshot
 	activeMiddle string // "cores" or "procs"
 	procSort     string // "mem", "cpu", "pid", "name"
+	procSortAsc  bool   // sort ascending when true, descending when false
 }
 
 func NewApp(collector backend.SnapshotCollector, interval time.Duration) *App {
@@ -88,6 +89,10 @@ func (a *App) Run(ctx context.Context) error {
 		case 'c', 'C':
 			// cycle process sort order (mem -> cpu -> pid -> name)
 			a.cycleProcSort()
+			return nil
+		case 's', 'S':
+			// toggle ascending/descending for the current sort column
+			a.toggleProcSortDir()
 			return nil
 		case 'e', 'E':
 			a.chooseEPP(ctx)
@@ -261,8 +266,17 @@ func (a *App) render(s model.Snapshot) {
 func (a *App) renderProcesses(s model.Snapshot) {
 	a.processTable.Clear()
 	headers := []string{"PID", "Name", "CPU%", "MEM"}
+	sortKeys := []string{"pid", "name", "cpu", "mem"}
 	for col, h := range headers {
-		a.processTable.SetCell(0, col, cell(h, palette.accent, true))
+		active := sortKeys[col] == a.procSort
+		if active {
+			arrow := "▼"
+			if a.procSortAsc {
+				arrow = "▲"
+			}
+			h += " " + arrow
+		}
+		a.processTable.SetCell(0, col, headerCell(h, active))
 	}
 	procs := s.Processes
 	// If snapshot didn't include processes, try the collector directly as a
@@ -277,25 +291,42 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		a.processTable.SetCell(1, 0, cell("No process data available.", palette.muted, false))
 		return
 	}
-	// show up to 50 processes
-	max := 50
-	if len(procs) < max {
-		max = len(procs)
-	}
-	// Apply UI-side sorting based on a.procSort if present. The backend
-	// already sorts by memory desc by default, but allow cycling.
+	// Apply UI-side sorting based on a.procSort and a.procSortAsc. Copy first
+	// so we never reorder the collector's shared slice.
+	procs = append([]model.Process(nil), procs...)
+	asc := a.procSortAsc
 	switch a.procSort {
-	case "mem":
-		// backend already sorted by mem desc
 	case "cpu":
-		sort.Slice(procs, func(i, j int) bool { return procs[i].CPUPercent > procs[j].CPUPercent })
+		sort.Slice(procs, func(i, j int) bool {
+			if asc {
+				return procs[i].CPUPercent < procs[j].CPUPercent
+			}
+			return procs[i].CPUPercent > procs[j].CPUPercent
+		})
 	case "pid":
-		sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
+		sort.Slice(procs, func(i, j int) bool {
+			if asc {
+				return procs[i].PID < procs[j].PID
+			}
+			return procs[i].PID > procs[j].PID
+		})
 	case "name":
-		sort.Slice(procs, func(i, j int) bool { return strings.ToLower(procs[i].Name) < strings.ToLower(procs[j].Name) })
+		sort.Slice(procs, func(i, j int) bool {
+			if asc {
+				return strings.ToLower(procs[i].Name) < strings.ToLower(procs[j].Name)
+			}
+			return strings.ToLower(procs[i].Name) > strings.ToLower(procs[j].Name)
+		})
+	default: // mem
+		sort.Slice(procs, func(i, j int) bool {
+			if asc {
+				return procs[i].RSSBytes < procs[j].RSSBytes
+			}
+			return procs[i].RSSBytes > procs[j].RSSBytes
+		})
 	}
 
-	for i := 0; i < max; i++ {
+	for i := range procs {
 		p := procs[i]
 		r := i + 1
 		a.processTable.SetCell(r, 0, cell(fmt.Sprintf("%d", p.PID), palette.text, false))
@@ -316,6 +347,12 @@ func (a *App) cycleProcSort() {
 	default:
 		a.procSort = "mem"
 	}
+	// Every column defaults to descending; press 's' to flip.
+	a.procSortAsc = false
+}
+
+func (a *App) toggleProcSortDir() {
+	a.procSortAsc = !a.procSortAsc
 }
 
 func (a *App) toggleSelectedCore(ctx context.Context) {
@@ -466,6 +503,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 		// UI-side controls
 		parts = append(parts, "[#7dd3fc]p[-] toggle cores/procs")
 		parts = append(parts, "[#7dd3fc]c[-] cycle proc sort")
+		parts = append(parts, "[#7dd3fc]s[-] sort dir")
 	}
 	parts = append(parts, "[#7dd3fc]r[-] refresh", "[#7dd3fc]q[-] quit")
 	return "[#94a3b8]" + strings.Join(parts, "  ") + "[-]"
@@ -845,6 +883,15 @@ func batteryRate(value *float64, status string, suffix string) string {
 		sign = "-"
 	}
 	return fmt.Sprintf("%s%.2f%s", sign, *value, suffix)
+}
+
+func headerCell(text string, active bool) *tview.TableCell {
+	color := palette.muted
+	style := tcell.StyleDefault.Foreground(color).Background(palette.panel).Bold(true)
+	if active {
+		style = style.Foreground(palette.accent).Underline(true)
+	}
+	return tview.NewTableCell(text).SetStyle(style).SetExpansion(1)
 }
 
 func cell(text string, color tcell.Color, bold bool) *tview.TableCell {
