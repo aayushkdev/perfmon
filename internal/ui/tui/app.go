@@ -46,7 +46,7 @@ type App struct {
 	flashUntil   time.Time       // when flashMsg should yield to the default hint
 }
 
-const footerHint = "[#64748b]Select a core row, then use the key actions in the footer. Writes go through /sys and may require privileges.[-]"
+const footerHint = "[silver]Select a core row, then use the key actions in the footer. Writes go through /sys and may require privileges.[-]"
 
 func NewApp(collector backend.SnapshotCollector, interval time.Duration) *App {
 	a := &App{
@@ -310,7 +310,7 @@ func (a *App) refresh(ctx context.Context) {
 	snap, err := a.collector.Snapshot(ctx)
 	a.app.QueueUpdateDraw(func() {
 		if err != nil {
-			a.flashFooter(fmt.Sprintf("[#ef4444]collector error: %v[-]", err))
+			a.flashFooter(fmt.Sprintf("[red]collector error: %v[-]", err))
 			return
 		}
 		a.render(snap)
@@ -320,7 +320,7 @@ func (a *App) refresh(ctx context.Context) {
 func (a *App) initialRender(ctx context.Context) {
 	snap, err := a.collector.Snapshot(ctx)
 	if err != nil {
-		a.flashFooter(fmt.Sprintf("[#ef4444]collector error: %v[-]", err))
+		a.flashFooter(fmt.Sprintf("[red]collector error: %v[-]", err))
 		return
 	}
 	a.render(snap)
@@ -332,7 +332,7 @@ func (a *App) render(s model.Snapshot) {
 	cpuPct := fmt.Sprintf("%.1f%%", s.CPU.UsagePercent)
 	memUsed := bytesGB(s.Memory.UsedBytes)
 	a.header.SetText(fmt.Sprintf(
-		"[#7dd3fc::b]perfmon[-:-:-]  [#94a3b8]kernel %s  arch %s  cpu %s  mem %s  updated %s[-]",
+		"[aqua::b]perfmon[-:-:-]  [silver]kernel %s  arch %s  cpu %s  mem %s  updated %s[-]",
 		fallback(s.Host.Kernel, "unknown"),
 		fallback(s.Host.Architecture, "unknown"),
 		cpuPct,
@@ -572,20 +572,20 @@ func (a *App) signalSelectedProcess(sig syscall.Signal) {
 	}
 	row, _ := a.processTable.GetSelection()
 	if row <= 0 || row-1 >= len(a.procList) {
-		a.flashFooter("[#f59e0b]Select a process row first.[-]")
+		a.flashFooter("[yellow]Select a process row first.[-]")
 		return
 	}
 	p := a.procList[row-1]
 	if p.PID <= 1 || p.PID == os.Getpid() {
-		a.flashFooter(fmt.Sprintf("[#f59e0b]Refusing to signal protected PID %d.[-]", p.PID))
+		a.flashFooter(fmt.Sprintf("[yellow]Refusing to signal protected PID %d.[-]", p.PID))
 		return
 	}
 	name := fallback(p.Name, "-")
 	if err := syscall.Kill(p.PID, sig); err != nil {
-		a.flashFooter(fmt.Sprintf("[#ef4444]Failed to signal %d (%s): %v[-]", p.PID, name, err))
+		a.flashFooter(fmt.Sprintf("[red]Failed to signal %d (%s): %v[-]", p.PID, name, err))
 		return
 	}
-	a.flashFooter(fmt.Sprintf("[#22c55e]Sent %s to %d (%s).[-]", signalName(sig), p.PID, name))
+	a.flashFooter(fmt.Sprintf("[green]Sent %s to %d (%s).[-]", signalName(sig), p.PID, name))
 }
 
 func signalName(sig syscall.Signal) string {
@@ -605,12 +605,12 @@ func (a *App) signalSelectedProcessTree(sig syscall.Signal) {
 	}
 	row, _ := a.processTable.GetSelection()
 	if row <= 0 || row-1 >= len(a.procList) {
-		a.flashFooter("[#f59e0b]Select a process row first.[-]")
+		a.flashFooter("[yellow]Select a process row first.[-]")
 		return
 	}
 	root := a.procList[row-1]
 	if root.PID <= 1 || root.PID == os.Getpid() {
-		a.flashFooter(fmt.Sprintf("[#f59e0b]Refusing to signal protected PID %d.[-]", root.PID))
+		a.flashFooter(fmt.Sprintf("[yellow]Refusing to signal protected PID %d.[-]", root.PID))
 		return
 	}
 	targets := processSubtree(root, a.allProcList)
@@ -619,11 +619,11 @@ func (a *App) signalSelectedProcessTree(sig syscall.Signal) {
 			continue
 		}
 		if err := syscall.Kill(target.PID, sig); err != nil {
-			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to signal %d (%s): %v[-]", target.PID, fallback(target.Name, "-"), err))
+			a.flashFooter(fmt.Sprintf("[red]Failed to signal %d (%s): %v[-]", target.PID, fallback(target.Name, "-"), err))
 			return
 		}
 	}
-	a.flashFooter(fmt.Sprintf("[#22c55e]Sent %s to %d-process subtree rooted at %d.[-]", signalName(sig), len(targets), root.PID))
+	a.flashFooter(fmt.Sprintf("[green]Sent %s to %d-process subtree rooted at %d.[-]", signalName(sig), len(targets), root.PID))
 }
 
 func processSubtree(root model.Process, processes []model.Process) []model.Process {
@@ -698,12 +698,12 @@ func flattenProcessTree(processes []model.Process) ([]model.Process, map[int]str
 
 func (a *App) toggleSelectedCore(ctx context.Context) {
 	if a.controls == nil {
-		a.flashFooter("[#f59e0b]Core online control is not supported by this collector.[-]")
+		a.flashFooter("[yellow]Core online control is not supported by this collector.[-]")
 		return
 	}
 	row, _ := a.coreTable.GetSelection()
 	if row <= 0 || row-1 >= len(a.last.CPU.Cores) {
-		a.flashFooter("[#f59e0b]Select a core row first.[-]")
+		a.flashFooter("[yellow]Select a core row first.[-]")
 		return
 	}
 	core := a.last.CPU.Cores[row-1]
@@ -713,7 +713,7 @@ func (a *App) toggleSelectedCore(ctx context.Context) {
 		action = "offline"
 	}
 	if !a.controls.CanSetCoreOnline(core.ID) {
-		a.flashFooter(fmt.Sprintf("[#f59e0b]Core %d cannot be toggled on this system.[-]", core.ID))
+		a.flashFooter(fmt.Sprintf("[yellow]Core %d cannot be toggled on this system.[-]", core.ID))
 		return
 	}
 	go a.applyControl(ctx, fmt.Sprintf("core %d %s", core.ID, action), func(runCtx context.Context) error {
@@ -723,7 +723,7 @@ func (a *App) toggleSelectedCore(ctx context.Context) {
 
 func (a *App) toggleTurbo(ctx context.Context) {
 	if a.controls == nil {
-		a.flashFooter("[#f59e0b]Turbo control is not supported by this collector.[-]")
+		a.flashFooter("[yellow]Turbo control is not supported by this collector.[-]")
 		return
 	}
 	enabled := a.last.CPU.TurboEnabled != nil && *a.last.CPU.TurboEnabled
@@ -735,11 +735,11 @@ func (a *App) toggleTurbo(ctx context.Context) {
 
 func (a *App) chooseGovernor(ctx context.Context) {
 	if a.controls == nil {
-		a.flashFooter("[#f59e0b]Governor control is not supported by this collector.[-]")
+		a.flashFooter("[yellow]Governor control is not supported by this collector.[-]")
 		return
 	}
 	if len(a.last.CPU.Governors) == 0 {
-		a.flashFooter("[#f59e0b]No governors detected on this system.[-]")
+		a.flashFooter("[yellow]No governors detected on this system.[-]")
 		return
 	}
 	choice := nextValue(a.last.CPU.ActiveGov, a.last.CPU.Governors)
@@ -750,12 +750,12 @@ func (a *App) chooseGovernor(ctx context.Context) {
 
 func (a *App) chooseEPP(ctx context.Context) {
 	if a.controls == nil {
-		a.flashFooter("[#f59e0b]EPP control is not supported by this collector.[-]")
+		a.flashFooter("[yellow]EPP control is not supported by this collector.[-]")
 		return
 	}
 	options := a.last.CPU.EPPChoices
 	if len(options) == 0 {
-		a.flashFooter("[#f59e0b]No EPP preferences are exposed by the CPU driver.[-]")
+		a.flashFooter("[yellow]No EPP preferences are exposed by the CPU driver.[-]")
 		return
 	}
 	choice := nextValue(a.last.CPU.EPP, options)
@@ -766,7 +766,7 @@ func (a *App) chooseEPP(ctx context.Context) {
 
 func (a *App) choosePowerProfile(ctx context.Context) {
 	if a.controls == nil {
-		a.flashFooter("[#f59e0b]Power profile control is not supported by this collector.[-]")
+		a.flashFooter("[yellow]Power profile control is not supported by this collector.[-]")
 		return
 	}
 	choice := nextValue(a.last.CPU.PowerProfile, []string{"powersave", "balanced", "performance"})
@@ -779,12 +779,12 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 	err := fn(ctx)
 	if err != nil {
 		a.app.QueueUpdateDraw(func() {
-			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to set %s: %s[-]", label, compactControlError(err)))
+			a.flashFooter(fmt.Sprintf("[red]Failed to set %s: %s[-]", label, compactControlError(err)))
 		})
 		return
 	}
 	a.app.QueueUpdateDraw(func() {
-		a.flashFooter(fmt.Sprintf("[#22c55e]Set %s.[-]", label))
+		a.flashFooter(fmt.Sprintf("[green]Set %s.[-]", label))
 	})
 	a.refresh(ctx)
 }
@@ -837,11 +837,11 @@ func (a *App) renderFooter(s model.Snapshot, message string) {
 		if query == "" {
 			query = "_"
 		}
-		searchHint := fmt.Sprintf("[#7dd3fc]Search[-] %q", query)
+		searchHint := fmt.Sprintf("[aqua]Search[-] %q", query)
 		if a.procSearch {
-			searchHint += "  [#64748b]Enter next  Esc clear[-]"
+			searchHint += "  [silver]Enter next  Esc clear[-]"
 		} else {
-			searchHint += "  [#64748b]/ edit  Esc clear[-]"
+			searchHint += "  [silver]/ edit  Esc clear[-]"
 		}
 		if message == footerHint {
 			message = searchHint
@@ -862,7 +862,7 @@ func (a *App) flashFooter(message string) {
 
 func (a *App) controlLegend(s model.Snapshot) string {
 	parts := make([]string, 0, 8)
-	key := func(k, label string) string { return "[#7dd3fc]" + k + "[-] " + label }
+	key := func(k, label string) string { return "[aqua]" + k + "[-] " + label }
 	if a.controls != nil {
 		if capabilityEnabled(s, "CPU governor") {
 			parts = append(parts, key("g", "governor"))
@@ -886,7 +886,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 		parts = append(parts, key("p", "processes"))
 	}
 	parts = append(parts, key("r", "refresh"), key("q", "quit"))
-	return "[#94a3b8]" + strings.Join(parts, "  ") + "[-]"
+	return "[silver]" + strings.Join(parts, "  ") + "[-]"
 }
 
 func renderControlsBox(s model.Snapshot, supported bool) string {
@@ -897,34 +897,34 @@ func renderControlsBox(s model.Snapshot, supported bool) string {
 	modeCap := powerModeCapability(s)
 	if !supported {
 		lines := []string{
-			"[#e2e8f0::b]Controls[-:-:-]",
+			"[white::b]Controls[-:-:-]",
 			"",
-			"[#94a3b8]mode   [-] " + fallback(s.CPU.PowerProfile, "unavailable"),
-			"[#94a3b8]governor[-] " + controlValue(fallback(s.CPU.ActiveGov, "unavailable"), governorCap),
-			"[#94a3b8]EPP    [-] " + controlValue(fallback(s.CPU.EPP, "unavailable"), eppCap),
-			"[#94a3b8]turbo  [-] " + controlValue(boolPtr(s.CPU.TurboEnabled), turboCap),
-			"[#94a3b8]core   [-] " + controlValue(coreControlSummary(s), coreCap),
+			"[silver]mode   [-] " + fallback(s.CPU.PowerProfile, "unavailable"),
+			"[silver]governor[-] " + controlValue(fallback(s.CPU.ActiveGov, "unavailable"), governorCap),
+			"[silver]EPP    [-] " + controlValue(fallback(s.CPU.EPP, "unavailable"), eppCap),
+			"[silver]turbo  [-] " + controlValue(boolPtr(s.CPU.TurboEnabled), turboCap),
+			"[silver]core   [-] " + controlValue(coreControlSummary(s), coreCap),
 			"",
-			"[#64748b]No writable control backend is available.[-]",
+			"[silver]No writable control backend is available.[-]",
 		}
 		return strings.Join(lines, "\n")
 	}
 	lines := []string{
-		"[#e2e8f0::b]Controls[-:-:-]",
+		"[white::b]Controls[-:-:-]",
 		"",
-		"[#94a3b8]mode   [-] " + fallback(s.CPU.PowerProfile, "unavailable"),
-		"[#94a3b8]governor[-] " + controlValue(fallback(s.CPU.ActiveGov, "unavailable"), governorCap),
-		"[#94a3b8]EPP    [-] " + controlValue(fallback(s.CPU.EPP, "unavailable"), eppCap),
-		"[#94a3b8]turbo  [-] " + controlValue(boolPtr(s.CPU.TurboEnabled), turboCap),
-		"[#94a3b8]core   [-] " + controlValue(coreControlSummary(s), coreCap),
+		"[silver]mode   [-] " + fallback(s.CPU.PowerProfile, "unavailable"),
+		"[silver]governor[-] " + controlValue(fallback(s.CPU.ActiveGov, "unavailable"), governorCap),
+		"[silver]EPP    [-] " + controlValue(fallback(s.CPU.EPP, "unavailable"), eppCap),
+		"[silver]turbo  [-] " + controlValue(boolPtr(s.CPU.TurboEnabled), turboCap),
+		"[silver]core   [-] " + controlValue(coreControlSummary(s), coreCap),
 		"",
-		"[#94a3b8]g[-] cycle governor" + capabilityState(governorCap),
-		"[#94a3b8]e[-] cycle EPP" + capabilityState(eppCap),
-		"[#94a3b8]t[-] toggle turbo" + capabilityState(turboCap),
-		"[#94a3b8]m[-] cycle power mode" + capabilityState(modeCap),
-		"[#94a3b8]o[-] toggle selected core" + capabilityState(coreCap),
+		"[silver]g[-] cycle governor" + capabilityState(governorCap),
+		"[silver]e[-] cycle EPP" + capabilityState(eppCap),
+		"[silver]t[-] toggle turbo" + capabilityState(turboCap),
+		"[silver]m[-] cycle power mode" + capabilityState(modeCap),
+		"[silver]o[-] toggle selected core" + capabilityState(coreCap),
 		"",
-		"[#64748b]Topology and capability scope come from kernel topology and sysfs target discovery.[-]",
+		"[silver]Topology and capability scope come from kernel topology and sysfs target discovery.[-]",
 	}
 	return strings.Join(lines, "\n")
 }
@@ -960,11 +960,11 @@ func powerModeCapability(s model.Snapshot) *model.Capability {
 
 func capabilityState(cap *model.Capability) string {
 	if cap == nil {
-		return "  [#f59e0b]unavailable[-]"
+		return "  [yellow]unavailable[-]"
 	}
 	label := statusLabel(cap.Status)
 	if cap.Targets > 0 {
-		return fmt.Sprintf("  %s [#64748b](%d target%s)[-]", label, cap.Targets, plural(cap.Targets))
+		return fmt.Sprintf("  %s [silver](%d target%s)[-]", label, cap.Targets, plural(cap.Targets))
 	}
 	return "  " + label
 }
@@ -972,11 +972,11 @@ func capabilityState(cap *model.Capability) string {
 func statusLabel(status model.CapabilityStatus) string {
 	switch status {
 	case model.CapabilityAvailable:
-		return "[#22c55e]available[-]"
+		return "[green]available[-]"
 	case model.CapabilityConditional:
-		return "[#f59e0b]conditional[-]"
+		return "[yellow]conditional[-]"
 	default:
-		return "[#f59e0b]unavailable[-]"
+		return "[yellow]unavailable[-]"
 	}
 }
 
@@ -988,9 +988,9 @@ func controlValue(value string, cap *model.Capability) string {
 	case model.CapabilityAvailable:
 		return value
 	case model.CapabilityConditional:
-		return "[#f59e0b]" + value + "[-]"
+		return "[yellow]" + value + "[-]"
 	default:
-		return "[#64748b]" + value + "[-]"
+		return "[silver]" + value + "[-]"
 	}
 }
 
@@ -1061,21 +1061,21 @@ func renderCPU(cpu model.CPU) string {
 
 	// Show summary top: cores, freq, temp, power (if present), then usage.
 	lines := []string{
-		fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", short),
-		fmt.Sprintf("[#94a3b8]cores [-] %d online / %d total", onlineCores(cpu.Cores), len(cpu.Cores)),
-		fmt.Sprintf("[#94a3b8]freq [-] %s", freq(avgFreq)),
-		fmt.Sprintf("[#94a3b8]temp [-] %s", floatPtr(cpu.TemperatureC, "C")),
+		fmt.Sprintf("[white::b]%s[-:-:-]", short),
+		fmt.Sprintf("[silver]cores [-] %d online / %d total", onlineCores(cpu.Cores), len(cpu.Cores)),
+		fmt.Sprintf("[silver]freq [-] %s", freq(avgFreq)),
+		fmt.Sprintf("[silver]temp [-] %s", floatPtr(cpu.TemperatureC, "C")),
 	}
 	if cpu.PowerW != nil {
-		lines = append(lines, fmt.Sprintf("[#94a3b8]power[-] %s", floatPtr(cpu.PowerW, "W")))
+		lines = append(lines, fmt.Sprintf("[silver]power[-] %s", floatPtr(cpu.PowerW, "W")))
 	}
 	lines = append(lines,
-		fmt.Sprintf("[#94a3b8]usage [-] %s %5.1f%%", bar(cpu.UsagePercent, 14), cpu.UsagePercent),
-		fmt.Sprintf("[#94a3b8]hybrid[-] %s", yesNo(cpu.HybridKnown && cpu.Hybrid)),
-		fmt.Sprintf("[#94a3b8]mode[-] %s", fallback(cpu.PowerProfile, "unavailable")),
-		fmt.Sprintf("[#94a3b8]governor[-] %s", fallback(cpu.ActiveGov, "unavailable")),
-		fmt.Sprintf("[#94a3b8]epp   [-] %s", fallback(cpu.EPP, "unavailable")),
-		fmt.Sprintf("[#94a3b8]turbo [-] %s", boolPtr(cpu.TurboEnabled)),
+		fmt.Sprintf("[silver]usage [-] %s %5.1f%%", bar(cpu.UsagePercent, 14), cpu.UsagePercent),
+		fmt.Sprintf("[silver]hybrid[-] %s", yesNo(cpu.HybridKnown && cpu.Hybrid)),
+		fmt.Sprintf("[silver]mode[-] %s", fallback(cpu.PowerProfile, "unavailable")),
+		fmt.Sprintf("[silver]governor[-] %s", fallback(cpu.ActiveGov, "unavailable")),
+		fmt.Sprintf("[silver]epp   [-] %s", fallback(cpu.EPP, "unavailable")),
+		fmt.Sprintf("[silver]turbo [-] %s", boolPtr(cpu.TurboEnabled)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -1152,22 +1152,22 @@ func renderMemory(mem model.Memory) string {
 	// available in the current Memory model. Show unavailable where missing
 	// and prioritise a clear header + metadata block followed by usage.
 	lines := []string{
-		fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", "Memory"),
-		fmt.Sprintf("[#94a3b8]total [-] %s", bytes(mem.TotalBytes)),
+		fmt.Sprintf("[white::b]%s[-:-:-]", "Memory"),
+		fmt.Sprintf("[silver]total [-] %s", bytes(mem.TotalBytes)),
 	}
 	if mem.ModuleCount != nil {
-		lines = append(lines, fmt.Sprintf("[#94a3b8]modules[-] %d", *mem.ModuleCount))
+		lines = append(lines, fmt.Sprintf("[silver]modules[-] %d", *mem.ModuleCount))
 	}
 	if mem.SpeedMHz != nil {
-		lines = append(lines, fmt.Sprintf("[#94a3b8]speed [-] %d MHz", *mem.SpeedMHz))
+		lines = append(lines, fmt.Sprintf("[silver]speed [-] %d MHz", *mem.SpeedMHz))
 	}
 	lines = append(lines,
 		"",
-		fmt.Sprintf("[#94a3b8]usage [-] %s %5.1f%%", bar(usedPct, 14), usedPct),
-		fmt.Sprintf("[#e2e8f0]%s[-] used of %s", bytes(mem.UsedBytes), bytes(mem.TotalBytes)),
+		fmt.Sprintf("[silver]usage [-] %s %5.1f%%", bar(usedPct, 14), usedPct),
+		fmt.Sprintf("[white]%s[-] used of %s", bytes(mem.UsedBytes), bytes(mem.TotalBytes)),
 		"",
-		fmt.Sprintf("[#94a3b8]swap [-] %s %5.1f%%", bar(swapPct, 14), swapPct),
-		fmt.Sprintf("[#e2e8f0]%s[-] used of %s", bytes(mem.SwapUsedBytes), bytes(mem.SwapTotalBytes)),
+		fmt.Sprintf("[silver]swap [-] %s %5.1f%%", bar(swapPct, 14), swapPct),
+		fmt.Sprintf("[white]%s[-] used of %s", bytes(mem.SwapUsedBytes), bytes(mem.SwapTotalBytes)),
 		"",
 	)
 	// PSI removed: no pressure information displayed.
@@ -1176,10 +1176,10 @@ func renderMemory(mem model.Memory) string {
 
 func renderThermals(s model.Snapshot) string {
 	if len(s.Thermals) == 0 {
-		return "[#94a3b8]No thermal sensors detected.[-]\n\n[#64748b]Thermal zones (hwmon/thermal) are used when the kernel exposes them.[-]"
+		return "[silver]No thermal sensors detected.[-]\n\n[silver]Thermal zones (hwmon/thermal) are used when the kernel exposes them.[-]"
 	}
 	lines := make([]string, 0, len(s.Thermals)+1)
-	lines = append(lines, "[#e2e8f0::b]Thermals[-:-:-]")
+	lines = append(lines, "[white::b]Thermals[-:-:-]")
 	var coreMax *float64
 	for _, sensor := range s.Thermals {
 		lower := strings.ToLower(sensor.Name)
@@ -1196,31 +1196,31 @@ func renderThermals(s model.Snapshot) string {
 		} else if strings.HasPrefix(lower, "nvme: ") {
 			name = "NVMe " + sensor.Name[len("nvme: "):]
 		}
-		lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s", name, floatPtr(sensor.TemperatureC, "C")))
+		lines = append(lines, fmt.Sprintf("[white]%s[-] %s", name, floatPtr(sensor.TemperatureC, "C")))
 	}
 	if coreMax != nil {
-		lines = append(lines, fmt.Sprintf("[#e2e8f0]CPU cores max[-] %.1fC", *coreMax))
+		lines = append(lines, fmt.Sprintf("[white]CPU cores max[-] %.1fC", *coreMax))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func renderBattery(s model.Snapshot) string {
 	if len(s.Batteries) == 0 && s.ACOnline == nil {
-		return "[#94a3b8]No battery or AC telemetry detected.[-]\n\n[#64748b]power_supply is used when the kernel exposes it.[-]"
+		return "[silver]No battery or AC telemetry detected.[-]\n\n[silver]power_supply is used when the kernel exposes it.[-]"
 	}
 	lines := make([]string, 0, 8)
-	lines = append(lines, "[#e2e8f0::b]Battery[-:-:-]")
+	lines = append(lines, "[white::b]Battery[-:-:-]")
 	if len(s.Batteries) == 0 {
-		lines = append(lines, fmt.Sprintf("[#94a3b8]AC[-] %s", acState(s.ACOnline)))
+		lines = append(lines, fmt.Sprintf("[silver]AC[-] %s", acState(s.ACOnline)))
 	} else {
 		for _, batt := range s.Batteries {
-			lines = append(lines, fmt.Sprintf("[#94a3b8]AC[-] %s  [#94a3b8]flow[-] %s  [#94a3b8]rate[-] %s  [#94a3b8]v[-] %s",
+			lines = append(lines, fmt.Sprintf("[silver]AC[-] %s  [silver]flow[-] %s  [silver]rate[-] %s  [silver]v[-] %s",
 				acState(s.ACOnline),
 				batteryFlow(batt.Status, batt.PowerW),
 				batteryRate(batt.PowerW, batt.Status, "W"),
 				voltageValue(batt.VoltageV),
 			))
-			lines = append(lines, fmt.Sprintf("[#94a3b8]energy[-] %s/%s",
+			lines = append(lines, fmt.Sprintf("[silver]energy[-] %s/%s",
 				floatPtr(batt.EnergyNowWh, "Wh"),
 				floatPtr(batt.EnergyFullWh, "Wh"),
 			))
@@ -1231,27 +1231,27 @@ func renderBattery(s model.Snapshot) string {
 
 func renderGPU(gpus []model.GPU) string {
 	if len(gpus) == 0 {
-		return "[#94a3b8]No DRM GPU devices detected.[-]\n\n[#64748b]AMD/Intel metrics can be added through DRM/hwmon backends; NVIDIA can use an optional nvidia-smi backend.[-]"
+		return "[silver]No DRM GPU devices detected.[-]\n\n[silver]AMD/Intel metrics can be added through DRM/hwmon backends; NVIDIA can use an optional nvidia-smi backend.[-]"
 	}
 	lines := make([]string, 0, len(gpus)*2)
 	for _, gpu := range gpus {
 		// First line: show the product name if available, otherwise the vendor.
-		lines = append(lines, fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)))
+		lines = append(lines, fmt.Sprintf("[white::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)))
 		if gpu.Driver != "" {
-			lines = append(lines, fmt.Sprintf("[#94a3b8]driver[-] %s", gpu.Driver))
+			lines = append(lines, fmt.Sprintf("[silver]driver[-] %s", gpu.Driver))
 		}
 		if gpu.PCIID != "" {
-			lines = append(lines, fmt.Sprintf("[#94a3b8]PCI[-] %s", gpu.PCIID))
+			lines = append(lines, fmt.Sprintf("[silver]PCI[-] %s", gpu.PCIID))
 		}
 		if len(gpu.Outputs) > 0 {
-			lines = append(lines, fmt.Sprintf("[#94a3b8]outputs[-] %s", strings.Join(gpu.Outputs, ", ")))
+			lines = append(lines, fmt.Sprintf("[silver]outputs[-] %s", strings.Join(gpu.Outputs, ", ")))
 		}
 		metrics := make([]string, 0, 2)
 		if gpu.TemperatureC != nil {
-			metrics = append(metrics, fmt.Sprintf("[#94a3b8]temp[-] %.1fC", *gpu.TemperatureC))
+			metrics = append(metrics, fmt.Sprintf("[silver]temp[-] %.1fC", *gpu.TemperatureC))
 		}
 		if gpu.PowerW != nil {
-			metrics = append(metrics, fmt.Sprintf("[#94a3b8]power[-] %.2fW", *gpu.PowerW))
+			metrics = append(metrics, fmt.Sprintf("[silver]power[-] %.2fW", *gpu.PowerW))
 		}
 		if len(metrics) > 0 {
 			lines = append(lines, strings.Join(metrics, "   "))
@@ -1347,11 +1347,11 @@ func bar(value float64, width int) string {
 		full = width
 		remainder = 0
 	}
-	color := "#22c55e"
+	color := "green"
 	if value >= 85 {
-		color = "#ef4444"
+		color = "red"
 	} else if value >= 65 {
-		color = "#f59e0b"
+		color = "yellow"
 	}
 	var b strings.Builder
 	b.Grow(width + 16)
@@ -1364,7 +1364,7 @@ func bar(value float64, width int) string {
 		full++
 	}
 	if full < width {
-		b.WriteString("[#334155]")
+		b.WriteString("[gray]")
 		b.WriteString(strings.Repeat("░", width-full))
 	}
 	b.WriteString("[-]")
@@ -1426,9 +1426,9 @@ func boolPtr(value *bool) string {
 		return "unavailable"
 	}
 	if *value {
-		return "[#22c55e]enabled[-]"
+		return "[green]enabled[-]"
 	}
-	return "[#f59e0b]disabled[-]"
+	return "[yellow]disabled[-]"
 }
 
 func floatPtr(value *float64, suffix string) string {
