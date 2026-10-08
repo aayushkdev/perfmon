@@ -39,6 +39,9 @@ type App struct {
 	procSort     string          // "mem", "cpu", "pid", "name"
 	procSortAsc  bool            // sort ascending when true, descending when false
 	procList     []model.Process // processes in the order currently displayed
+	allProcList  []model.Process // complete process list used by tree actions
+	procQuery    string          // case-insensitive process filter
+	procSearch   bool            // process search input is active
 	flashMsg     string          // transient footer message (e.g. signal result)
 	flashUntil   time.Time       // when flashMsg should yield to the default hint
 }
@@ -73,6 +76,40 @@ func (a *App) Run(ctx context.Context) error {
 				a.app.Stop()
 				return nil
 			}
+			if a.procSearch && (event.Rune() == 'u' || event.Rune() == 'U') {
+				a.procQuery = ""
+				go a.refresh(ctx)
+				return nil
+			}
+		}
+		if a.procSearch {
+			switch event.Key() {
+			case tcell.KeyEsc:
+				a.procQuery = ""
+				a.procSearch = false
+				go a.refresh(ctx)
+				return nil
+			case tcell.KeyEnter:
+				a.selectNextProcessMatch()
+				return nil
+			case tcell.KeyBackspace, tcell.KeyBackspace2:
+				query := []rune(a.procQuery)
+				if len(query) > 0 {
+					a.procQuery = string(query[:len(query)-1])
+					go a.refresh(ctx)
+				}
+				return nil
+			}
+			if event.Rune() >= ' ' && event.Rune() != '/' {
+				a.procQuery += string(event.Rune())
+				go a.refresh(ctx)
+			}
+			return nil
+		}
+		if event.Key() == tcell.KeyEsc && a.procQuery != "" {
+			a.procQuery = ""
+			go a.refresh(ctx)
+			return nil
 		}
 		switch event.Rune() {
 		case 'q', 'Q':
@@ -93,6 +130,12 @@ func (a *App) Run(ctx context.Context) error {
 				a.switchMiddle("cores")
 			}
 			go a.refresh(ctx)
+			return nil
+		case '/':
+			if a.activeMiddle == "procs" {
+				a.procSearch = true
+				a.renderFooter(a.last, "")
+			}
 			return nil
 		case 'c', 'C':
 			// cycle process sort order (pid -> name -> cpu -> mem)
@@ -322,6 +365,7 @@ func (a *App) renderProcesses(s model.Snapshot) {
 	}
 	a.processTable.Clear()
 	a.procList = nil
+	a.allProcList = nil
 	headers := []string{"PID", "Name", "Command", "CPU%", "MEM"}
 	sortKeys := []string{"pid", "name", "", "cpu", "mem"}
 	_, _, tableWidth, _ := a.processTable.GetInnerRect()
@@ -410,6 +454,7 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		})
 	}
 	procs, treePrefixes := flattenProcessTree(procs)
+	a.allProcList = append([]model.Process(nil), procs...)
 
 	for i := range procs {
 		p := procs[i]
@@ -437,10 +482,48 @@ func (a *App) renderProcesses(s model.Snapshot) {
 	}
 	a.procList = procs
 	row := selectedProcessRow(procs, selectedPID, selectedStartTime)
+	if a.procQuery != "" && !processMatches(procs, row-1, a.procQuery) {
+		row = matchingProcessRow(procs, a.procQuery)
+	}
 	if row == 0 {
 		row = validDataRow(selectedRow, len(procs))
 	}
 	a.processTable.Select(row, 0)
+}
+
+func processMatches(processes []model.Process, index int, query string) bool {
+	if index < 0 || index >= len(processes) {
+		return false
+	}
+	query = strings.ToLower(query)
+	process := processes[index]
+	return strings.Contains(strings.ToLower(fmt.Sprintf("%d", process.PID)), query) ||
+		strings.Contains(strings.ToLower(process.Name), query) ||
+		strings.Contains(strings.ToLower(process.Cmdline), query)
+}
+
+func matchingProcessRow(processes []model.Process, query string) int {
+	for i := range processes {
+		if processMatches(processes, i, query) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func (a *App) selectNextProcessMatch() {
+	if a.procQuery == "" || len(a.procList) == 0 {
+		return
+	}
+	row, _ := a.processTable.GetSelection()
+	start := row - 1
+	for offset := 1; offset <= len(a.procList); offset++ {
+		index := (start + offset) % len(a.procList)
+		if processMatches(a.procList, index, a.procQuery) {
+			a.processTable.Select(index+1, 0)
+			return
+		}
+	}
 }
 
 func selectedProcessRow(processes []model.Process, pid int, startTime uint64) int {
@@ -530,7 +613,7 @@ func (a *App) signalSelectedProcessTree(sig syscall.Signal) {
 		a.flashFooter(fmt.Sprintf("[#f59e0b]Refusing to signal protected PID %d.[-]", root.PID))
 		return
 	}
-	targets := processSubtree(root, a.procList)
+	targets := processSubtree(root, a.allProcList)
 	for _, target := range targets {
 		if target.PID <= 1 || target.PID == os.Getpid() {
 			continue
@@ -749,6 +832,23 @@ func (a *App) renderFooter(s model.Snapshot, message string) {
 	if message == "" {
 		message = footerHint
 	}
+	if a.activeMiddle == "procs" && (a.procSearch || a.procQuery != "") {
+		query := a.procQuery
+		if query == "" {
+			query = "_"
+		}
+		searchHint := fmt.Sprintf("[#7dd3fc]Search[-] %q", query)
+		if a.procSearch {
+			searchHint += "  [#64748b]Enter next  Esc clear[-]"
+		} else {
+			searchHint += "  [#64748b]/ edit  Esc clear[-]"
+		}
+		if message == footerHint {
+			message = searchHint
+		} else {
+			message += "  " + searchHint
+		}
+	}
 	a.status.SetText(message + "\n" + a.controlLegend(s))
 }
 
@@ -777,7 +877,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 	}
 	// Mode-specific controls: only advertise what the active view responds to.
 	if a.activeMiddle == "procs" {
-		parts = append(parts, key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"), key("X", "tree kill"))
+		parts = append(parts, key("/", "search"), key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"), key("X", "tree kill"))
 		parts = append(parts, key("p", "cores"))
 	} else {
 		if a.controls != nil {
