@@ -558,10 +558,24 @@ func (c *Collector) SetEPP(ctx context.Context, preference string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if eppRequiresPowersaveGovernor(c.readCPUDriver()) && preference != "performance" {
+		if err := c.writeToCPUFiles(ctx, "scaling_governor", "powersave"); err != nil {
+			return fmt.Errorf("EPP %q requires the powersave governor: %w", preference, err)
+		}
+	}
 	if err := c.writeToCPUFiles(ctx, "energy_performance_preference", preference); err != nil {
 		return err
 	}
 	return nil
+}
+
+func eppRequiresPowersaveGovernor(driver string) bool {
+	switch driver {
+	case "intel_pstate", "amd-pstate", "amd-pstate-epp":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Collector) SetTurboEnabled(ctx context.Context, enabled bool) error {
@@ -607,7 +621,7 @@ func (c *Collector) SetPowerProfile(ctx context.Context, profile string) error {
 		}
 		return c.SetTurboEnabled(ctx, true)
 	case "balanced":
-		if err := c.SetCPUGovernor(ctx, pickSupported("schedutil", c.readAvailableGovernors(), "ondemand", "performance")); err != nil {
+		if err := c.SetCPUGovernor(ctx, pickSupported("schedutil", c.readAvailableGovernors(), "ondemand", "powersave", "performance")); err != nil {
 			return err
 		}
 		if err := c.SetEPP(ctx, pickSupported("balance_performance", c.readEPPChoices(), "balance_power", "performance")); err != nil {
@@ -665,6 +679,8 @@ func (c *Collector) writeToCPUFiles(ctx context.Context, suffix, value string) e
 		return fmt.Errorf("%s control is unavailable", suffix)
 	}
 	written := false
+	var lastErr error
+	failed := false
 	for _, path := range uniqueParentFiles(files) {
 		select {
 		case <-ctx.Done():
@@ -673,10 +689,19 @@ func (c *Collector) writeToCPUFiles(ctx context.Context, suffix, value string) e
 		}
 		if err := writeString(path, value); err == nil {
 			written = true
+		} else {
+			failed = true
+			lastErr = fmt.Errorf("%s/%s: %w", filepath.Base(filepath.Dir(path)), filepath.Base(path), err)
 		}
 	}
+	if failed {
+		return fmt.Errorf("failed to apply %s=%q consistently: %w", suffix, value, lastErr)
+	}
 	if !written {
-		return fmt.Errorf("failed to write %s", suffix)
+		if lastErr != nil {
+			return fmt.Errorf("failed to write %s=%q: %w", suffix, value, lastErr)
+		}
+		return fmt.Errorf("failed to write %s=%q", suffix, value)
 	}
 	return nil
 }
@@ -1370,15 +1395,36 @@ func (c *Collector) readAvailableGovernors() []string {
 }
 
 func (c *Collector) readEPPChoices() []string {
-	return dedupeSortedFieldsFromGlobs(
+	return orderEPPChoices(dedupeSortedFieldsFromGlobs(
 		filepath.Join(c.sys, "devices/system/cpu/cpu*/cpufreq/energy_performance_available_preferences"),
 		filepath.Join(c.sys, "devices/system/cpu/cpufreq/policy*/energy_performance_available_preferences"),
-	)
+	))
+}
+
+func orderEPPChoices(choices []string) []string {
+	preferred := []string{"performance", "balance_performance", "balance_power", "power", "default"}
+	available := make(map[string]bool, len(choices))
+	for _, choice := range choices {
+		available[choice] = true
+	}
+	ordered := make([]string, 0, len(choices))
+	for _, choice := range preferred {
+		if available[choice] {
+			ordered = append(ordered, choice)
+			delete(available, choice)
+		}
+	}
+	remaining := make([]string, 0, len(available))
+	for choice := range available {
+		remaining = append(remaining, choice)
+	}
+	sort.Strings(remaining)
+	return append(ordered, remaining...)
 }
 
 func (c *Collector) readPowerProfile() string {
 	path := filepath.Join(c.sys, "firmware/acpi/platform_profile")
-	return readString(path)
+	return normalizePowerProfile(readString(path))
 }
 
 func (c *Collector) readCPUDriver() string {

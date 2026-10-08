@@ -1,6 +1,7 @@
 package drm
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,18 +19,22 @@ func New(sys string) Reader {
 }
 
 func (r Reader) Read() []model.GPU {
-	cards, _ := filepath.Glob(filepath.Join(r.sys, "class/drm/card[0-9]*"))
-	gpus := make([]model.GPU, 0, len(cards))
-	for _, card := range cards {
+	entries, _ := os.ReadDir(filepath.Join(r.sys, "class/drm"))
+	gpus := make([]model.GPU, 0, len(entries))
+	for _, entry := range entries {
+		if !isCardName(entry.Name()) {
+			continue
+		}
+		card := filepath.Join(r.sys, "class/drm", entry.Name())
 		device := filepath.Join(card, "device")
 		vendor := vendorName(readString(filepath.Join(device, "vendor")))
 		if vendor == "" {
 			continue
 		}
 		gpu := model.GPU{
-			ID:     filepath.Base(card),
+			ID:     entry.Name(),
 			Vendor: vendor,
-			Name:   readString(filepath.Join(device, "product_name")),
+			Name:   deviceName(device, vendor),
 		}
 		// Try to read hwmon temperature and power exposed under the device
 		// e.g. /sys/class/drm/cardX/device/hwmon/hwmon*/temp*_input
@@ -43,6 +48,45 @@ func (r Reader) Read() []model.GPU {
 		gpus = append(gpus, gpu)
 	}
 	return gpus
+}
+
+func isCardName(name string) bool {
+	if !strings.HasPrefix(name, "card") || len(name) == len("card") {
+		return false
+	}
+	_, err := strconv.Atoi(name[len("card"):])
+	return err == nil
+}
+
+func deviceName(device, vendor string) string {
+	for _, name := range []string{"product_name", "name", "model_name", "label"} {
+		if value := readString(filepath.Join(device, name)); value != "" {
+			return value
+		}
+	}
+	uevent := readKeyValues(filepath.Join(device, "uevent"))
+	if id := uevent["PCI_ID"]; id != "" {
+		if driver := uevent["DRIVER"]; driver != "" {
+			return fmt.Sprintf("%s GPU (%s, PCI %s)", vendor, driver, id)
+		}
+		return fmt.Sprintf("%s GPU (PCI %s)", vendor, id)
+	}
+	return vendor
+}
+
+func readKeyValues(path string) map[string]string {
+	values := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return values
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(key) != "" {
+			values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return values
 }
 
 func vendorName(raw string) string {

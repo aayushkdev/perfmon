@@ -175,6 +175,7 @@ func (a *App) build() {
 	a.batteryPanel = textPanel("Battery", true)
 	a.batteryPanel.SetWrap(true)
 	a.gpuPanel = textPanel("GPU", true)
+	a.gpuPanel.SetWrap(true)
 	a.status = textPanel("", false)
 
 	a.coreTable = tablePanel("Cores")
@@ -290,6 +291,7 @@ func (a *App) render(s model.Snapshot) {
 // renderProcesses populates the processTable. Right now it's a stub that
 // shows a placeholder unless the collector implements a ProcessLister.
 func (a *App) renderProcesses(s model.Snapshot) {
+	selectedRow, _ := a.processTable.GetSelection()
 	a.processTable.Clear()
 	a.procList = nil
 	headers := []string{"PID", "Name", "CPU%", "MEM"}
@@ -316,6 +318,7 @@ func (a *App) renderProcesses(s model.Snapshot) {
 	}
 	if len(procs) == 0 {
 		a.processTable.SetCell(1, 0, cell("No process data available.", palette.muted, false))
+		a.processTable.Select(0, 0)
 		return
 	}
 	// Apply UI-side sorting based on a.procSort and a.procSortAsc. Copy first
@@ -362,6 +365,7 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		a.processTable.SetCell(r, 3, cell(bytes(p.RSSBytes), palette.text, false))
 	}
 	a.procList = procs
+	a.processTable.Select(validDataRow(selectedRow, len(procs)), 0)
 }
 
 func (a *App) cycleProcSort() {
@@ -475,7 +479,8 @@ func (a *App) chooseEPP(ctx context.Context) {
 	}
 	options := a.last.CPU.EPPChoices
 	if len(options) == 0 {
-		options = []string{"performance", "balance_performance", "balance_power", "power"}
+		a.flashFooter("[#f59e0b]No EPP preferences are exposed by the CPU driver.[-]")
+		return
 	}
 	choice := nextValue(a.last.CPU.EPP, options)
 	go a.applyControl(ctx, fmt.Sprintf("EPP %s", choice), func(runCtx context.Context) error {
@@ -498,7 +503,7 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 	err := fn(ctx)
 	if err != nil {
 		a.app.QueueUpdateDraw(func() {
-			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to set %s: %v[-]", label, err))
+			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to set %s: %s[-]", label, compactControlError(err)))
 		})
 		return
 	}
@@ -506,6 +511,15 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 		a.flashFooter(fmt.Sprintf("[#22c55e]Set %s.[-]", label))
 	})
 	a.refresh(ctx)
+}
+
+func compactControlError(err error) string {
+	message := strings.Join(strings.Fields(err.Error()), " ")
+	const maxLength = 112
+	if len(message) > maxLength {
+		return message[:maxLength-3] + "..."
+	}
+	return message
 }
 
 func nextValue(current string, options []string) string {
@@ -792,6 +806,7 @@ func shortCPUName(in string) string {
 }
 
 func (a *App) renderCores(cores []model.CPUCore) {
+	selectedRow, _ := a.coreTable.GetSelection()
 	a.coreTable.Clear()
 	showType := a.last.CPU.HybridKnown
 	headers := []string{"ID"}
@@ -800,7 +815,7 @@ func (a *App) renderCores(cores []model.CPUCore) {
 	}
 	headers = append(headers, "On", "Usage", "Freq", "Governor", "EPP")
 	for col, h := range headers {
-		a.coreTable.SetCell(0, col, cell(h, palette.accent, true))
+		a.coreTable.SetCell(0, col, cell(h, palette.accent, true).SetSelectable(false))
 	}
 	for row, core := range cores {
 		r := row + 1
@@ -820,6 +835,21 @@ func (a *App) renderCores(cores []model.CPUCore) {
 		col++
 		a.coreTable.SetCell(r, col, cell(fallback(core.EPP, "-"), palette.muted, false))
 	}
+	if len(cores) > 0 {
+		a.coreTable.Select(validDataRow(selectedRow, len(cores)), 0)
+	} else {
+		a.coreTable.Select(0, 0)
+	}
+}
+
+func validDataRow(row, dataRows int) int {
+	if dataRows == 0 {
+		return 0
+	}
+	if row < 1 || row > dataRows {
+		return 1
+	}
+	return row
 }
 
 func renderMemory(mem model.Memory) string {
@@ -895,10 +925,17 @@ func renderGPU(gpus []model.GPU) string {
 	lines := make([]string, 0, len(gpus)*2)
 	for _, gpu := range gpus {
 		// First line: show the product name if available, otherwise the vendor.
-		lines = append(lines,
-			fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)),
-			fmt.Sprintf("[#94a3b8]temp [-] %s   [#94a3b8]power[-] %s", floatPtr(gpu.TemperatureC, "C"), floatPtr(gpu.PowerW, "W")),
-		)
+		lines = append(lines, fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)))
+		metrics := make([]string, 0, 2)
+		if gpu.TemperatureC != nil {
+			metrics = append(metrics, fmt.Sprintf("[#94a3b8]temp[-] %.1fC", *gpu.TemperatureC))
+		}
+		if gpu.PowerW != nil {
+			metrics = append(metrics, fmt.Sprintf("[#94a3b8]power[-] %.2fW", *gpu.PowerW))
+		}
+		if len(metrics) > 0 {
+			lines = append(lines, strings.Join(metrics, "   "))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -964,7 +1001,7 @@ func headerCell(text string, active bool) *tview.TableCell {
 	if active {
 		style = style.Foreground(palette.accent).Underline(true)
 	}
-	return tview.NewTableCell(text).SetStyle(style).SetExpansion(1)
+	return tview.NewTableCell(text).SetStyle(style).SetExpansion(1).SetSelectable(false)
 }
 
 func cell(text string, color tcell.Color, bold bool) *tview.TableCell {
