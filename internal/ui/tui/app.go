@@ -183,6 +183,25 @@ func (a *App) build() {
 
 	a.coreTable = tablePanel("Cores")
 	a.processTable = tablePanel("Processes")
+	a.processTable.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseScrollUp && action != tview.MouseScrollDown {
+			return action, event
+		}
+		row, _ := a.processTable.GetSelection()
+		if action == tview.MouseScrollUp {
+			row--
+		} else {
+			row++
+		}
+		if row < 1 {
+			row = 1
+		}
+		if len(a.procList) > 0 && row > len(a.procList) {
+			row = len(a.procList)
+		}
+		a.processTable.Select(row, 0)
+		return tview.MouseConsumed, nil
+	})
 	// processTable placeholder will be populated when rendering
 	a.middlePages = tview.NewPages()
 	a.middlePages.AddPage("cores", a.coreTable, true, true)
@@ -295,6 +314,12 @@ func (a *App) render(s model.Snapshot) {
 // shows a placeholder unless the collector implements a ProcessLister.
 func (a *App) renderProcesses(s model.Snapshot) {
 	selectedRow, _ := a.processTable.GetSelection()
+	selectedPID := 0
+	selectedStartTime := uint64(0)
+	if selectedRow > 0 && selectedRow-1 < len(a.procList) {
+		selectedPID = a.procList[selectedRow-1].PID
+		selectedStartTime = a.procList[selectedRow-1].StartTime
+	}
 	a.processTable.Clear()
 	a.procList = nil
 	headers := []string{"PID", "Name", "Command", "CPU%", "MEM"}
@@ -411,7 +436,23 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		a.processTable.SetCell(r, column, memCell)
 	}
 	a.procList = procs
-	a.processTable.Select(validDataRow(selectedRow, len(procs)), 0)
+	row := selectedProcessRow(procs, selectedPID, selectedStartTime)
+	if row == 0 {
+		row = validDataRow(selectedRow, len(procs))
+	}
+	a.processTable.Select(row, 0)
+}
+
+func selectedProcessRow(processes []model.Process, pid int, startTime uint64) int {
+	if pid <= 0 {
+		return 0
+	}
+	for i, process := range processes {
+		if process.PID == pid && (startTime == 0 || process.StartTime == startTime) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 func truncateProcessText(value string, max int) string {

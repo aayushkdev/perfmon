@@ -97,6 +97,7 @@ type GPU struct {
 type Process struct {
 	PID        int
 	PPID       int
+	StartTime  uint64
 	Name       string
 	Cmdline    string
 	CPUPercent float64
