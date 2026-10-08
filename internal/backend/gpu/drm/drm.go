@@ -1,7 +1,6 @@
 package drm
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,10 +30,14 @@ func (r Reader) Read() []model.GPU {
 		if vendor == "" {
 			continue
 		}
+		uevent := readKeyValues(filepath.Join(device, "uevent"))
 		gpu := model.GPU{
-			ID:     entry.Name(),
-			Vendor: vendor,
-			Name:   deviceName(device, vendor),
+			ID:      entry.Name(),
+			Vendor:  vendor,
+			Name:    deviceName(device, vendor),
+			Driver:  uevent["DRIVER"],
+			PCIID:   uevent["PCI_ID"],
+			Outputs: connectorOutputs(filepath.Join(r.sys, "class/drm"), entry.Name()),
 		}
 		// Try to read hwmon temperature and power exposed under the device
 		// e.g. /sys/class/drm/cardX/device/hwmon/hwmon*/temp*_input
@@ -48,6 +51,26 @@ func (r Reader) Read() []model.GPU {
 		gpus = append(gpus, gpu)
 	}
 	return gpus
+}
+
+func connectorOutputs(drmPath, card string) []string {
+	entries, _ := os.ReadDir(drmPath)
+	prefix := card + "-"
+	outputs := make([]string, 0)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		connector := filepath.Join(drmPath, entry.Name())
+		status := readString(filepath.Join(connector, "status"))
+		if status != "connected" {
+			continue
+		}
+		name := strings.TrimPrefix(entry.Name(), prefix)
+		name += " (connected)"
+		outputs = append(outputs, name)
+	}
+	return outputs
 }
 
 func isCardName(name string) bool {
@@ -64,14 +87,7 @@ func deviceName(device, vendor string) string {
 			return value
 		}
 	}
-	uevent := readKeyValues(filepath.Join(device, "uevent"))
-	if id := uevent["PCI_ID"]; id != "" {
-		if driver := uevent["DRIVER"]; driver != "" {
-			return fmt.Sprintf("%s GPU (%s, PCI %s)", vendor, driver, id)
-		}
-		return fmt.Sprintf("%s GPU (PCI %s)", vendor, id)
-	}
-	return vendor
+	return vendor + " GPU"
 }
 
 func readKeyValues(path string) map[string]string {

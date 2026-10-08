@@ -186,17 +186,17 @@ func (a *App) build() {
 	a.middlePages.AddPage("procs", a.processTable, true, false)
 	a.activeMiddle = "cores"
 	a.root = tview.NewGrid().
-		SetRows(3, 0, 9, 2).
-		SetColumns(32, 0, 32).
+		SetRows(3, 12, 0, 7, 2).
+		SetColumns(-1, -1, -1).
 		SetBorders(false).
 		AddItem(a.header, 0, 0, 1, 3, 0, 0, false).
 		AddItem(a.cpuPanel, 1, 0, 1, 1, 0, 0, false).
-		AddItem(a.middlePages, 1, 1, 1, 1, 0, 0, true).
-		AddItem(a.memoryPanel, 1, 2, 1, 1, 0, 0, false).
-		AddItem(a.gpuPanel, 2, 0, 1, 1, 0, 0, false).
-		AddItem(a.thermalPanel, 2, 1, 1, 1, 0, 0, false).
-		AddItem(a.batteryPanel, 2, 2, 1, 1, 0, 0, false).
-		AddItem(a.status, 3, 0, 1, 3, 0, 0, false)
+		AddItem(a.memoryPanel, 1, 1, 1, 1, 0, 0, false).
+		AddItem(a.gpuPanel, 1, 2, 1, 1, 0, 0, false).
+		AddItem(a.middlePages, 2, 0, 1, 3, 0, 0, true).
+		AddItem(a.thermalPanel, 3, 0, 1, 2, 0, 0, false).
+		AddItem(a.batteryPanel, 3, 2, 1, 1, 0, 0, false).
+		AddItem(a.status, 4, 0, 1, 3, 0, 0, false)
 	a.pages.AddPage("main", a.root, true, true)
 }
 
@@ -926,6 +926,15 @@ func renderGPU(gpus []model.GPU) string {
 	for _, gpu := range gpus {
 		// First line: show the product name if available, otherwise the vendor.
 		lines = append(lines, fmt.Sprintf("[#e2e8f0::b]%s[-:-:-]", fallback(gpu.Name, gpu.Vendor)))
+		if gpu.Driver != "" {
+			lines = append(lines, fmt.Sprintf("[#94a3b8]driver[-] %s", gpu.Driver))
+		}
+		if gpu.PCIID != "" {
+			lines = append(lines, fmt.Sprintf("[#94a3b8]PCI[-] %s", gpu.PCIID))
+		}
+		if len(gpu.Outputs) > 0 {
+			lines = append(lines, fmt.Sprintf("[#94a3b8]outputs[-] %s", strings.Join(gpu.Outputs, ", ")))
+		}
 		metrics := make([]string, 0, 2)
 		if gpu.TemperatureC != nil {
 			metrics = append(metrics, fmt.Sprintf("[#94a3b8]temp[-] %.1fC", *gpu.TemperatureC))
