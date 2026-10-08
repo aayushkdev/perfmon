@@ -116,6 +116,9 @@ func (a *App) Run(ctx context.Context) error {
 			// force-kill the selected process (SIGKILL)
 			a.signalSelectedProcess(syscall.SIGKILL)
 			return nil
+		case 'X':
+			a.signalSelectedProcessTree(syscall.SIGTERM)
+			return nil
 		case 'e', 'E':
 			a.chooseEPP(ctx)
 			return nil
@@ -294,8 +297,24 @@ func (a *App) renderProcesses(s model.Snapshot) {
 	selectedRow, _ := a.processTable.GetSelection()
 	a.processTable.Clear()
 	a.procList = nil
-	headers := []string{"PID", "Name", "CPU%", "MEM"}
-	sortKeys := []string{"pid", "name", "cpu", "mem"}
+	headers := []string{"PID", "Name", "Command", "CPU%", "MEM"}
+	sortKeys := []string{"pid", "name", "", "cpu", "mem"}
+	_, _, tableWidth, _ := a.processTable.GetInnerRect()
+	showCommand := tableWidth == 0 || tableWidth >= 90
+	commandWidth := 48
+	if tableWidth > 0 {
+		commandWidth = tableWidth - 68
+		if commandWidth < 8 {
+			commandWidth = 8
+		}
+		if commandWidth > 48 {
+			commandWidth = 48
+		}
+	}
+	if !showCommand {
+		headers = []string{"PID", "Name", "CPU%", "MEM"}
+		sortKeys = []string{"pid", "name", "cpu", "mem"}
+	}
 	for col, h := range headers {
 		active := sortKeys[col] == a.procSort
 		if active {
@@ -305,7 +324,17 @@ func (a *App) renderProcesses(s model.Snapshot) {
 			}
 			h += " " + arrow
 		}
-		a.processTable.SetCell(0, col, headerCell(h, active))
+		header := headerCell(h, active)
+		if col == 0 {
+			header.SetMaxWidth(8).SetExpansion(1)
+		} else if showCommand && col == 2 {
+			header.SetMaxWidth(commandWidth).SetExpansion(1)
+		} else if col == 3 || (!showCommand && col == 2) {
+			header.SetMaxWidth(8).SetExpansion(1)
+		} else if col == 4 || (!showCommand && col == 3) {
+			header.SetMaxWidth(16).SetExpansion(1)
+		}
+		a.processTable.SetCell(0, col, header)
 	}
 	procs := s.Processes
 	// If snapshot didn't include processes, try the collector directly as a
@@ -355,17 +384,43 @@ func (a *App) renderProcesses(s model.Snapshot) {
 			return procs[i].RSSBytes > procs[j].RSSBytes
 		})
 	}
+	procs, treePrefixes := flattenProcessTree(procs)
 
 	for i := range procs {
 		p := procs[i]
 		r := i + 1
-		a.processTable.SetCell(r, 0, cell(fmt.Sprintf("%d", p.PID), palette.text, false))
-		a.processTable.SetCell(r, 1, cell(fallback(p.Name, "-"), palette.muted, false))
-		a.processTable.SetCell(r, 2, cell(fmt.Sprintf("%.1f", p.CPUPercent), palette.text, false))
-		a.processTable.SetCell(r, 3, cell(bytes(p.RSSBytes), palette.text, false))
+		pidCell := cell(fmt.Sprintf("%d", p.PID), palette.text, false)
+		pidCell.SetMaxWidth(8).SetExpansion(1)
+		a.processTable.SetCell(r, 0, pidCell)
+		nameCell := cell(treePrefixes[p.PID]+fallback(p.Name, "-"), palette.muted, false)
+		nameCell.SetMaxWidth(28).SetExpansion(1)
+		a.processTable.SetCell(r, 1, nameCell)
+		column := 2
+		if showCommand {
+			commandCell := cell(truncateProcessText(p.Cmdline, commandWidth), palette.muted, false)
+			commandCell.SetMaxWidth(commandWidth).SetExpansion(1)
+			a.processTable.SetCell(r, column, commandCell)
+			column++
+		}
+		cpuCell := cell(fmt.Sprintf("%.1f", p.CPUPercent), palette.text, false)
+		cpuCell.SetMaxWidth(8).SetExpansion(1)
+		a.processTable.SetCell(r, column, cpuCell)
+		column++
+		memCell := cell(bytes(p.RSSBytes), palette.text, false)
+		memCell.SetMaxWidth(16).SetExpansion(1)
+		a.processTable.SetCell(r, column, memCell)
 	}
 	a.procList = procs
 	a.processTable.Select(validDataRow(selectedRow, len(procs)), 0)
+}
+
+func truncateProcessText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) <= max {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:max-1]) + "…"
 }
 
 func (a *App) cycleProcSort() {
@@ -418,6 +473,103 @@ func signalName(sig syscall.Signal) string {
 	default:
 		return sig.String()
 	}
+}
+
+func (a *App) signalSelectedProcessTree(sig syscall.Signal) {
+	if a.activeMiddle != "procs" {
+		return
+	}
+	row, _ := a.processTable.GetSelection()
+	if row <= 0 || row-1 >= len(a.procList) {
+		a.flashFooter("[#f59e0b]Select a process row first.[-]")
+		return
+	}
+	root := a.procList[row-1]
+	if root.PID <= 1 || root.PID == os.Getpid() {
+		a.flashFooter(fmt.Sprintf("[#f59e0b]Refusing to signal protected PID %d.[-]", root.PID))
+		return
+	}
+	targets := processSubtree(root, a.procList)
+	for _, target := range targets {
+		if target.PID <= 1 || target.PID == os.Getpid() {
+			continue
+		}
+		if err := syscall.Kill(target.PID, sig); err != nil {
+			a.flashFooter(fmt.Sprintf("[#ef4444]Failed to signal %d (%s): %v[-]", target.PID, fallback(target.Name, "-"), err))
+			return
+		}
+	}
+	a.flashFooter(fmt.Sprintf("[#22c55e]Sent %s to %d-process subtree rooted at %d.[-]", signalName(sig), len(targets), root.PID))
+}
+
+func processSubtree(root model.Process, processes []model.Process) []model.Process {
+	children := make(map[int][]model.Process)
+	for _, process := range processes {
+		children[process.PPID] = append(children[process.PPID], process)
+	}
+	var result []model.Process
+	var visit func(model.Process)
+	visit = func(process model.Process) {
+		for _, child := range children[process.PID] {
+			visit(child)
+		}
+		result = append(result, process)
+	}
+	visit(root)
+	return result
+}
+
+func flattenProcessTree(processes []model.Process) ([]model.Process, map[int]string) {
+	children := make(map[int][]model.Process)
+	known := make(map[int]bool, len(processes))
+	order := make(map[int]int, len(processes))
+	for i, process := range processes {
+		known[process.PID] = true
+		order[process.PID] = i
+		children[process.PPID] = append(children[process.PPID], process)
+	}
+	byOrder := func(items []model.Process) {
+		sort.SliceStable(items, func(i, j int) bool { return order[items[i].PID] < order[items[j].PID] })
+	}
+	roots := make([]model.Process, 0)
+	for _, process := range processes {
+		if process.PPID <= 0 || !known[process.PPID] {
+			roots = append(roots, process)
+		}
+	}
+	byOrder(roots)
+	for parent := range children {
+		byOrder(children[parent])
+	}
+	flat := make([]model.Process, 0, len(processes))
+	prefixes := make(map[int]string, len(processes))
+	var visit func(model.Process, string, bool, bool)
+	visit = func(process model.Process, prefix string, last, root bool) {
+		branch := ""
+		if !root {
+			branch = "├─ "
+			if last {
+				branch = "└─ "
+			}
+		}
+		prefixes[process.PID] = prefix + branch
+		flat = append(flat, process)
+		childPrefix := prefix
+		if !root {
+			if last {
+				childPrefix += "   "
+			} else {
+				childPrefix += "│  "
+			}
+		}
+		for i, child := range children[process.PID] {
+			visit(child, childPrefix, i == len(children[process.PID])-1, false)
+		}
+	}
+	for i, root := range roots {
+		visit(root, "", i == len(roots)-1, true)
+	}
+	return flat, prefixes
 }
 
 func (a *App) toggleSelectedCore(ctx context.Context) {
@@ -584,7 +736,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 	}
 	// Mode-specific controls: only advertise what the active view responds to.
 	if a.activeMiddle == "procs" {
-		parts = append(parts, key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"))
+		parts = append(parts, key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"), key("X", "tree kill"))
 		parts = append(parts, key("p", "cores"))
 	} else {
 		if a.controls != nil {

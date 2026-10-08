@@ -96,6 +96,7 @@ type GPU struct {
 // lister UI. Fields are intentionally minimal to keep the model small.
 type Process struct {
 	PID        int
+	PPID       int
 	Name       string
 	Cmdline    string
 	CPUPercent float64
