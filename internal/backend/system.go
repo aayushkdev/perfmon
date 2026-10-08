@@ -1092,9 +1092,13 @@ func (c *Collector) readCPUTemperature() *float64 {
 
 func (c *Collector) readThermals() []model.ThermalSensor {
 	sensors := make([]model.ThermalSensor, 0, 8)
+	seenNames := make(map[string]bool)
 	for _, path := range c.thermalSensorPaths() {
 		base := filepath.Dir(path)
 		name := readString(filepath.Join(base, "name"))
+		if name == "" {
+			name = readString(filepath.Join(base, "type"))
+		}
 		if name == "" {
 			name = filepath.Base(base)
 		}
@@ -1103,6 +1107,9 @@ func (c *Collector) readThermals() []model.ThermalSensor {
 			continue
 		}
 		prefix := strings.TrimSuffix(filepath.Base(path), "_input")
+		if label := readString(filepath.Join(base, prefix+"_label")); label != "" {
+			name += ": " + label
+		}
 		sensor := model.ThermalSensor{
 			Name:         name,
 			Source:       thermalSourceLabel(base),
@@ -1111,6 +1118,11 @@ func (c *Collector) readThermals() []model.ThermalSensor {
 			CriticalC:    readMilliTemperature(firstExistingPath(filepath.Join(base, prefix+"_crit"), filepath.Join(base, "trip_point_1_temp"))),
 			Throttled:    readBoolField(firstExistingPath(filepath.Join(base, prefix+"_alarm"), filepath.Join(base, "temp_alarm"))),
 		}
+		key := strings.ToLower(strings.TrimSpace(sensor.Name))
+		if sensor.Source == "thermal" && seenNames[key] {
+			continue
+		}
+		seenNames[key] = true
 		sensors = append(sensors, sensor)
 	}
 	return sensors

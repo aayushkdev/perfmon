@@ -887,8 +887,26 @@ func renderThermals(s model.Snapshot) string {
 	}
 	lines := make([]string, 0, len(s.Thermals)+1)
 	lines = append(lines, "[#e2e8f0::b]Thermals[-:-:-]")
+	var coreMax *float64
 	for _, sensor := range s.Thermals {
-		lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s", sensor.Name, floatPtr(sensor.TemperatureC, "C")))
+		lower := strings.ToLower(sensor.Name)
+		if strings.HasPrefix(lower, "coretemp: core ") {
+			if sensor.TemperatureC != nil && (coreMax == nil || *sensor.TemperatureC > *coreMax) {
+				value := *sensor.TemperatureC
+				coreMax = &value
+			}
+			continue
+		}
+		name := sensor.Name
+		if strings.HasPrefix(lower, "coretemp: package") {
+			name = "CPU package"
+		} else if strings.HasPrefix(lower, "nvme: ") {
+			name = "NVMe " + sensor.Name[len("nvme: "):]
+		}
+		lines = append(lines, fmt.Sprintf("[#e2e8f0]%s[-] %s", name, floatPtr(sensor.TemperatureC, "C")))
+	}
+	if coreMax != nil {
+		lines = append(lines, fmt.Sprintf("[#e2e8f0]CPU cores max[-] %.1fC", *coreMax))
 	}
 	return strings.Join(lines, "\n")
 }
