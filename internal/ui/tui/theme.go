@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/gdamore/tcell/v2"
+import (
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+)
 
 // selectionColor is the fixed background used for selected rows and cells. It is
 // an explicit RGB color so its brightness is known and the text color can be
@@ -40,4 +43,21 @@ func contrastText(bg tcell.Color) tcell.Color {
 		return tcell.ColorBlack
 	}
 	return tcell.ColorWhite
+}
+
+func headerCell(text string, active bool) *tview.TableCell {
+	color := palette.accent
+	style := tcell.StyleDefault.Foreground(color).Background(palette.panel).Bold(true)
+	if active {
+		style = style.Foreground(palette.accent).Underline(true)
+	}
+	return tview.NewTableCell(text).SetStyle(style).SetExpansion(1).SetSelectable(false)
+}
+
+func cell(text string, color tcell.Color, bold bool) *tview.TableCell {
+	style := tcell.StyleDefault.Foreground(color).Background(palette.panel)
+	if bold {
+		style = style.Bold(true)
+	}
+	return tview.NewTableCell(text).SetStyle(style).SetExpansion(1)
 }
