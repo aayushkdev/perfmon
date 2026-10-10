@@ -1,21 +1,18 @@
-package backend
+package thermal
 
 import (
-	"github.com/aayushkdev/perfmon/internal/model"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func (c *Collector) readCPUTemperature() *float64 {
-	thermals := c.readThermals()
-	return firstThermalTemperature(thermals)
-}
-
-func (c *Collector) readThermals() []model.ThermalSensor {
+func Read(sys string) []model.ThermalSensor {
 	sensors := make([]model.ThermalSensor, 0, 8)
 	seenNames := make(map[string]bool)
-	for _, path := range c.thermalSensorPaths() {
+	for _, path := range sensorPaths(sys) {
 		base := filepath.Dir(path)
 		name := readString(filepath.Join(base, "name"))
 		if name == "" {
@@ -34,7 +31,7 @@ func (c *Collector) readThermals() []model.ThermalSensor {
 		}
 		sensor := model.ThermalSensor{
 			Name:         name,
-			Source:       thermalSourceLabel(base),
+			Source:       sourceLabel(base),
 			TemperatureC: temp,
 			MaxC:         readMilliTemperature(firstExistingPath(filepath.Join(base, prefix+"_max"), filepath.Join(base, "trip_point_0_temp"))),
 			CriticalC:    readMilliTemperature(firstExistingPath(filepath.Join(base, prefix+"_crit"), filepath.Join(base, "trip_point_1_temp"))),
@@ -50,18 +47,27 @@ func (c *Collector) readThermals() []model.ThermalSensor {
 	return sensors
 }
 
-func (c *Collector) thermalSensorPaths() []string {
+func FirstTemperature(sensors []model.ThermalSensor) *float64 {
+	for _, sensor := range sensors {
+		if sensor.TemperatureC != nil {
+			return sensor.TemperatureC
+		}
+	}
+	return nil
+}
+
+func sensorPaths(sys string) []string {
 	matches := make([]string, 0, 16)
-	if hwmon, _ := filepath.Glob(filepath.Join(c.sys, "class/hwmon/hwmon*/temp*_input")); len(hwmon) > 0 {
+	if hwmon, _ := filepath.Glob(filepath.Join(sys, "class/hwmon/hwmon*/temp*_input")); len(hwmon) > 0 {
 		matches = append(matches, hwmon...)
 	}
-	if zones, _ := filepath.Glob(filepath.Join(c.sys, "class/thermal/thermal_zone*/temp")); len(zones) > 0 {
+	if zones, _ := filepath.Glob(filepath.Join(sys, "class/thermal/thermal_zone*/temp")); len(zones) > 0 {
 		matches = append(matches, zones...)
 	}
 	return matches
 }
 
-func thermalSourceLabel(base string) string {
+func sourceLabel(base string) string {
 	switch {
 	case strings.Contains(base, "hwmon"):
 		return "hwmon"
@@ -85,11 +91,33 @@ func readMilliTemperature(path string) *float64 {
 	return &value
 }
 
-func firstThermalTemperature(sensors []model.ThermalSensor) *float64 {
-	for _, sensor := range sensors {
-		if sensor.TemperatureC != nil {
-			return sensor.TemperatureC
+func firstExistingPath(paths ...string) string {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path
 		}
 	}
-	return nil
+	return ""
+}
+
+func readString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func readBoolField(path string) *bool {
+	raw := readString(path)
+	switch strings.ToLower(raw) {
+	case "1", "y", "yes", "true", "on":
+		value := true
+		return &value
+	case "0", "n", "no", "false", "off":
+		value := false
+		return &value
+	default:
+		return nil
+	}
 }

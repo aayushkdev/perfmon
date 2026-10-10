@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/aayushkdev/perfmon/internal/backend/cpu"
 	"github.com/aayushkdev/perfmon/internal/backend/gpu"
+	"github.com/aayushkdev/perfmon/internal/backend/thermal"
 	"github.com/aayushkdev/perfmon/internal/model"
 	"sort"
 	"time"
@@ -64,7 +65,7 @@ func (c *Collector) Snapshot(ctx context.Context) (model.Snapshot, error) {
 			UsagePercent: usage(c.prev[-1], total),
 			PowerProfile: c.readPowerProfile(),
 			Cores:        cores,
-			TemperatureC: firstThermalTemperature(thermals),
+			TemperatureC: thermal.FirstTemperature(thermals),
 			PowerW:       nil,
 			Governors:    c.readAvailableGovernors(),
 			EPPChoices:   c.readEPPChoices(),
