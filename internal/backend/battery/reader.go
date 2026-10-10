@@ -1,14 +1,16 @@
-package backend
+package battery
 
 import (
-	"github.com/aayushkdev/perfmon/internal/model"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func (c *Collector) readBatteries() ([]model.Battery, *bool) {
-	matches, _ := filepath.Glob(filepath.Join(c.sys, "class/power_supply/*"))
+func Read(sys string) ([]model.Battery, *bool) {
+	matches, _ := filepath.Glob(filepath.Join(sys, "class/power_supply/*"))
 	batteries := make([]model.Battery, 0, len(matches))
 	var acOnline *bool
 	for _, base := range matches {
@@ -160,4 +162,12 @@ func readBoolField(path string) *bool {
 	default:
 		return nil
 	}
+}
+
+func readString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
