@@ -2,8 +2,14 @@ package backend
 
 import (
 	"context"
+	"github.com/aayushkdev/perfmon/internal/backend/battery"
+	"github.com/aayushkdev/perfmon/internal/backend/capabilities"
 	"github.com/aayushkdev/perfmon/internal/backend/cpu"
+	"github.com/aayushkdev/perfmon/internal/backend/fs"
 	"github.com/aayushkdev/perfmon/internal/backend/gpu"
+	"github.com/aayushkdev/perfmon/internal/backend/memory"
+	"github.com/aayushkdev/perfmon/internal/backend/power"
+	"github.com/aayushkdev/perfmon/internal/backend/process"
 	"github.com/aayushkdev/perfmon/internal/backend/thermal"
 	"github.com/aayushkdev/perfmon/internal/model"
 	"sort"
@@ -20,22 +26,22 @@ func (c *Collector) Snapshot(ctx context.Context) (model.Snapshot, error) {
 	default:
 	}
 
-	stats, total, err := c.readCPUStats()
+	cpuReader := cpu.Reader{Proc: c.proc, Sys: c.sys, Previous: c.prev}
+	stats, total, err := cpuReader.ReadStats()
 	if err != nil {
 		return model.Snapshot{}, err
 	}
 
-	info := c.readCPUInfo()
-	classifier := c.selectCPUClassifier(info)
-	coreIDs := c.readCPUIDs()
+	info := cpuReader.ReadInfo()
+	classifier := cpuReader.SelectCPUClassifier(info)
+	coreIDs := cpuReader.ReadCPUIDs()
 	if len(coreIDs) == 0 {
-		coreIDs = sortedStatIDs(stats)
+		coreIDs = cpu.SortedStatIDs(stats)
 	}
-	cores := c.buildCores(coreIDs, stats, info, classifier)
+	cores := cpuReader.BuildCores(coreIDs, stats, info, classifier)
 	sort.Slice(cores, func(i, j int) bool { return cores[i].ID < cores[j].ID })
-	thermals := c.readThermals()
-	powerDomains := c.readPowerDomains()
-	// Aggregate package power into a single CPU power estimate when available.
+	thermals := thermal.Read(c.sys)
+	powerDomains := power.Read(c.sys, c.raplPrev)
 	var cpuPower float64
 	var cpuPowerSeen bool
 	for _, d := range powerDomains {
@@ -44,51 +50,50 @@ func (c *Collector) Snapshot(ctx context.Context) (model.Snapshot, error) {
 			cpuPowerSeen = true
 		}
 	}
-	// cpuPower will be attached to the snapshot below when constructing the
-	// model.CPU value.
-	batteries, acOnline := c.readBatteries()
+	batteries, acOnline := battery.Read(c.sys)
 
 	snap := model.Snapshot{
 		Timestamp: time.Now(),
 		Host: model.Host{
-			Kernel:       kernelRelease(),
-			Architecture: machineArch(),
+			Kernel:       fs.KernelRelease(),
+			Architecture: fs.MachineArch(),
 		},
 		CPU: model.CPU{
-			Vendor:       info.vendor,
-			Model:        info.model,
-			Architecture: machineArch(),
+			Vendor:       info.Public().Vendor,
+			Model:        info.Public().Model,
+			Architecture: fs.MachineArch(),
 			Driver:       c.readCPUDriver(),
-			Topology:     buildTopology(cores),
+			Topology:     cpu.BuildTopology(cores),
 			Hybrid:       cpu.HasHybridHints(cores),
-			HybridKnown:  hybridDetected(cores),
-			UsagePercent: usage(c.prev[-1], total),
+			HybridKnown:  cpu.HybridDetected(cores),
+			UsagePercent: cpu.Usage(c.prev[-1], total),
 			PowerProfile: c.readPowerProfile(),
 			Cores:        cores,
 			TemperatureC: thermal.FirstTemperature(thermals),
 			PowerW:       nil,
 			Governors:    c.readAvailableGovernors(),
 			EPPChoices:   c.readEPPChoices(),
-			ActiveGov:    firstNonEmptyGovernor(cores),
-			EPP:          firstNonEmptyEPP(cores),
+			ActiveGov:    fs.FirstNonEmptyGovernor(cores),
+			EPP:          fs.FirstNonEmptyEPP(cores),
 			TurboEnabled: c.readTurboEnabled(),
 		},
 		Thermals:     thermals,
 		Power:        powerDomains,
 		Batteries:    batteries,
 		ACOnline:     acOnline,
-		Memory:       c.readMemory(),
+		Memory:       memory.Read(c.proc, c.sys),
 		GPUs:         gpu.Read(c.sys),
-		Capabilities: c.capabilities(),
+		Capabilities: capabilities.Read(c.sys),
 	}
 
-	// attach aggregated CPU power if available
 	if cpuPowerSeen {
 		snap.CPU.PowerW = &cpuPower
 	}
 
-	// update processes snapshot (best-effort)
-	c.updateProcesses()
+	processes, prevProcJiffies, prevTotalJiffies := process.Scan(c.proc, c.prevProcJiffies, c.prevTotalJiffies)
+	c.processes = processes
+	c.prevProcJiffies = prevProcJiffies
+	c.prevTotalJiffies = prevTotalJiffies
 	snap.Processes = c.processes
 
 	for id, stat := range stats {
@@ -98,8 +103,6 @@ func (c *Collector) Snapshot(ctx context.Context) (model.Snapshot, error) {
 	return snap, nil
 }
 
-// Processes returns a copy of the last collected process list. It allows the
-// UI to query process data directly if needed.
 func (c *Collector) Processes() []model.Process {
 	c.mu.Lock()
 	defer c.mu.Unlock()

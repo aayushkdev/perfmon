@@ -1,20 +1,95 @@
-package backend
+package cpu
 
 import (
+	"errors"
 	"fmt"
-	"github.com/aayushkdev/perfmon/internal/backend/cpu"
-	"github.com/aayushkdev/perfmon/internal/backend/cpu/amd"
-	"github.com/aayushkdev/perfmon/internal/backend/cpu/generic"
-	"github.com/aayushkdev/perfmon/internal/backend/cpu/intel"
-	"github.com/aayushkdev/perfmon/internal/model"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/aayushkdev/perfmon/internal/backend/cpu/vendors"
+	"github.com/aayushkdev/perfmon/internal/backend/fs"
+	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func hybridDetected(cores []model.CPUCore) bool {
+type Reader struct {
+	Proc     string
+	Sys      string
+	Previous map[int]Stat
+}
+
+type Stat struct {
+	Idle  uint64
+	Total uint64
+}
+
+func (r *Reader) ReadStats() (map[int]Stat, Stat, error) {
+	data, err := os.ReadFile(filepath.Join(r.Proc, "stat"))
+	if err != nil {
+		return nil, Stat{}, err
+	}
+	stats := make(map[int]Stat)
+	var aggregate Stat
+
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 8 || !strings.HasPrefix(fields[0], "cpu") {
+			continue
+		}
+		stat, err := parseStat(fields[1:])
+		if err != nil {
+			continue
+		}
+		if fields[0] == "cpu" {
+			aggregate = stat
+			continue
+		}
+		id, err := strconv.Atoi(strings.TrimPrefix(fields[0], "cpu"))
+		if err == nil {
+			stats[id] = stat
+		}
+	}
+	if len(stats) == 0 {
+		return nil, Stat{}, errors.New("no CPU stats found")
+	}
+	return stats, aggregate, nil
+}
+
+func parseStat(fields []string) (Stat, error) {
+	var values [10]uint64
+	for i := range values {
+		if i >= len(fields) {
+			break
+		}
+		v, err := strconv.ParseUint(fields[i], 10, 64)
+		if err != nil {
+			return Stat{}, err
+		}
+		values[i] = v
+	}
+	idle := values[3] + values[4]
+	total := uint64(0)
+	for _, v := range values {
+		total += v
+	}
+	return Stat{Idle: idle, Total: total}, nil
+}
+
+func Usage(prev, cur Stat) float64 {
+	if prev.Total == 0 || cur.Total <= prev.Total {
+		return 0
+	}
+	totalDelta := cur.Total - prev.Total
+	idleDelta := cur.Idle - prev.Idle
+	if totalDelta == 0 || idleDelta > totalDelta {
+		return 0
+	}
+	return float64(totalDelta-idleDelta) * 100 / float64(totalDelta)
+}
+
+func HybridDetected(cores []model.CPUCore) bool {
 	seenPerf := false
 	seenEff := false
 	for _, core := range cores {
@@ -31,21 +106,21 @@ func hybridDetected(cores []model.CPUCore) bool {
 	return false
 }
 
-type cpuInfo struct {
+type ReaderInfo struct {
 	vendor string
 	model  string
 }
 
-func (i cpuInfo) public() cpu.Info {
-	return cpu.Info{Vendor: i.vendor, Model: i.model}
+func (i ReaderInfo) Public() Info {
+	return Info{Vendor: i.vendor, Model: i.model}
 }
 
-func (c *Collector) readCPUInfo() cpuInfo {
-	data, err := os.ReadFile(filepath.Join(c.proc, "cpuinfo"))
+func (r *Reader) ReadInfo() ReaderInfo {
+	data, err := os.ReadFile(filepath.Join(r.Proc, "cpuinfo"))
 	if err != nil {
-		return cpuInfo{}
+		return ReaderInfo{}
 	}
-	info := cpuInfo{}
+	info := ReaderInfo{}
 	for _, line := range strings.Split(string(data), "\n") {
 		key, val, ok := strings.Cut(line, ":")
 		if !ok {
@@ -65,19 +140,19 @@ func (c *Collector) readCPUInfo() cpuInfo {
 	return info
 }
 
-func (c *Collector) buildCores(ids []int, stats map[int]cpuStat, info cpuInfo, classifier cpu.Classifier) []model.CPUCore {
+func (r *Reader) BuildCores(ids []int, stats map[int]Stat, info ReaderInfo, classifier Classifier) []model.CPUCore {
 	cores := make([]model.CPUCore, 0, len(ids))
 	for _, id := range ids {
 		stat, ok := stats[id]
 		if !ok {
-			stat = cpuStat{}
+			stat = Stat{}
 		}
-		base := filepath.Join(c.sys, "devices/system/cpu", fmt.Sprintf("cpu%d", id))
+		base := filepath.Join(r.Sys, "devices/system/cpu", fmt.Sprintf("cpu%d", id))
 		freqBase := filepath.Join(base, "cpufreq")
-		topology := c.readCoreTopology(base)
+		topology := r.readCoreTopology(base)
 		core := model.CPUCore{
 			ID:              id,
-			Online:          c.readOnline(base, id),
+			Online:          r.readOnline(base, id),
 			Type:            model.CoreUnknown,
 			PackageID:       topology.packageID,
 			CoreID:          topology.coreID,
@@ -87,26 +162,26 @@ func (c *Collector) buildCores(ids []int, stats map[int]cpuStat, info cpuInfo, c
 			TopologyType:    topology.coreType,
 			ThreadSiblings:  topology.threadSiblings,
 			CoreSiblings:    topology.coreSiblings,
-			UsagePercent:    usage(c.prev[id], stat),
-			FrequencyMHz:    readKHzAsMHz(filepath.Join(freqBase, "scaling_cur_freq")),
-			MinFrequencyMHz: readKHzAsMHz(filepath.Join(freqBase, "scaling_min_freq")),
-			MaxFrequencyMHz: readKHzAsMHz(filepath.Join(freqBase, "scaling_max_freq")),
-			Governor:        readString(filepath.Join(freqBase, "scaling_governor")),
-			EPP:             readString(filepath.Join(filepath.Join(base, "cpufreq"), "energy_performance_preference")),
+			UsagePercent:    Usage(r.Previous[id], stat),
+			FrequencyMHz:    fs.KHzAsMHz(filepath.Join(freqBase, "scaling_cur_freq")),
+			MinFrequencyMHz: fs.KHzAsMHz(filepath.Join(freqBase, "scaling_min_freq")),
+			MaxFrequencyMHz: fs.KHzAsMHz(filepath.Join(freqBase, "scaling_max_freq")),
+			Governor:        fs.ReadString(filepath.Join(freqBase, "scaling_governor")),
+			EPP:             fs.ReadString(filepath.Join(filepath.Join(base, "cpufreq"), "energy_performance_preference")),
 		}
-		core.Type = classifier.Classify(core, info.public())
+		core.Type = classifier.Classify(core, info.Public())
 		cores = append(cores, core)
 	}
-	normalizeHybridTypes(cores)
+	NormalizeHybridTypes(cores)
 	return cores
 }
 
-func (c *Collector) readCPUIDs() []int {
+func (r *Reader) ReadCPUIDs() []int {
 	for _, path := range []string{
-		filepath.Join(c.sys, "devices/system/cpu/present"),
-		filepath.Join(c.sys, "devices/system/cpu/possible"),
+		filepath.Join(r.Sys, "devices/system/cpu/present"),
+		filepath.Join(r.Sys, "devices/system/cpu/possible"),
 	} {
-		ids := parseCPUList(readString(path))
+		ids := parseCPUList(fs.ReadString(path))
 		if len(ids) > 0 {
 			return ids
 		}
@@ -114,7 +189,37 @@ func (c *Collector) readCPUIDs() []int {
 	return nil
 }
 
-func sortedStatIDs(stats map[int]cpuStat) []int {
+func parseCPUList(value string) []int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	ids := make([]int, 0)
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if start, end, ok := strings.Cut(part, "-"); ok {
+			s, err1 := strconv.Atoi(strings.TrimSpace(start))
+			e, err2 := strconv.Atoi(strings.TrimSpace(end))
+			if err1 != nil || err2 != nil || e < s {
+				continue
+			}
+			for i := s; i <= e; i++ {
+				ids = append(ids, i)
+			}
+			continue
+		}
+		id, err := strconv.Atoi(part)
+		if err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func SortedStatIDs(stats map[int]Stat) []int {
 	ids := make([]int, 0, len(stats))
 	for id := range stats {
 		ids = append(ids, id)
@@ -123,11 +228,11 @@ func sortedStatIDs(stats map[int]cpuStat) []int {
 	return ids
 }
 
-func (c *Collector) readOnline(base string, id int) bool {
+func (r *Reader) readOnline(base string, id int) bool {
 	if id == 0 {
 		return true
 	}
-	return readString(filepath.Join(base, "online")) != "0"
+	return fs.ReadString(filepath.Join(base, "online")) != "0"
 }
 
 type coreTopology struct {
@@ -141,23 +246,23 @@ type coreTopology struct {
 	coreSiblings   []int
 }
 
-func (c *Collector) readCoreTopology(base string) coreTopology {
+func (r *Reader) readCoreTopology(base string) coreTopology {
 	top := coreTopology{
 		packageID: -1,
 		coreID:    -1,
 		dieID:     -1,
 		nodeID:    -1,
 	}
-	top.packageID = readInt(filepath.Join(base, "topology/physical_package_id"), -1)
-	top.coreID = readInt(filepath.Join(base, "topology/core_id"), -1)
-	top.dieID = readInt(filepath.Join(base, "topology/die_id"), -1)
-	top.capacity = readInt(filepath.Join(base, "cpu_capacity"), 0)
+	top.packageID = fs.ReadInt(filepath.Join(base, "topology/physical_package_id"), -1)
+	top.coreID = fs.ReadInt(filepath.Join(base, "topology/core_id"), -1)
+	top.dieID = fs.ReadInt(filepath.Join(base, "topology/die_id"), -1)
+	top.capacity = fs.ReadInt(filepath.Join(base, "cpu_capacity"), 0)
 	if top.capacity == 0 {
-		top.capacity = readInt(filepath.Join(base, "topology/core_capacity"), 0)
+		top.capacity = fs.ReadInt(filepath.Join(base, "topology/core_capacity"), 0)
 	}
-	top.coreType = strings.ToLower(readString(filepath.Join(base, "topology/core_type")))
-	top.threadSiblings = parseCPUList(readString(filepath.Join(base, "topology/thread_siblings_list")))
-	top.coreSiblings = parseCPUList(readString(filepath.Join(base, "topology/core_siblings_list")))
+	top.coreType = strings.ToLower(fs.ReadString(filepath.Join(base, "topology/core_type")))
+	top.threadSiblings = parseCPUList(fs.ReadString(filepath.Join(base, "topology/thread_siblings_list")))
+	top.coreSiblings = parseCPUList(fs.ReadString(filepath.Join(base, "topology/core_siblings_list")))
 	top.nodeID = readNodeID(base)
 	return top
 }
@@ -175,7 +280,7 @@ func readNodeID(base string) int {
 	return -1
 }
 
-func normalizeHybridTypes(cores []model.CPUCore) {
+func NormalizeHybridTypes(cores []model.CPUCore) {
 	if hasKnownCoreTypes(cores) {
 		return
 	}
@@ -244,7 +349,7 @@ func applyTypeHintsFromCapacity(cores []model.CPUCore) bool {
 	return seenPerf && seenEff
 }
 
-func buildTopology(cores []model.CPUCore) model.CPUTopology {
+func BuildTopology(cores []model.CPUCore) model.CPUTopology {
 	topology := model.CPUTopology{}
 	packages := map[int]struct{}{}
 	nodes := map[int]struct{}{}
@@ -288,14 +393,14 @@ func classifyTopologyHint(raw string) model.CoreType {
 	}
 }
 
-func (c *Collector) selectCPUClassifier(info cpuInfo) cpu.Classifier {
-	public := info.public()
+func (r *Reader) SelectCPUClassifier(info ReaderInfo) Classifier {
+	public := info.Public()
 	vendor := strings.ToLower(public.Vendor)
 	if strings.Contains(vendor, "intel") || strings.Contains(vendor, "genuineintel") {
-		return intel.New(c.sys)
+		return vendors.NewIntel(r.Sys)
 	}
-	if amd.Supports(public) {
-		return amd.New()
+	if vendors.SupportsAMD(public) {
+		return vendors.NewAMD()
 	}
-	return generic.New()
+	return vendors.NewGeneric()
 }

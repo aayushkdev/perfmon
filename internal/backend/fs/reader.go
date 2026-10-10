@@ -1,4 +1,4 @@
-package backend
+package fs
 
 import (
 	"os"
@@ -9,8 +9,8 @@ import (
 	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func readKHzAsMHz(path string) int {
-	raw := readString(path)
+func KHzAsMHz(path string) int {
+	raw := ReadString(path)
 	if raw == "" {
 		return 0
 	}
@@ -21,7 +21,7 @@ func readKHzAsMHz(path string) int {
 	return khz / 1000
 }
 
-func readString(path string) string {
+func ReadString(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -29,8 +29,8 @@ func readString(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func readInt(path string, fallback int) int {
-	raw := readString(path)
+func ReadInt(path string, fallback int) int {
+	raw := ReadString(path)
 	if raw == "" {
 		return fallback
 	}
@@ -41,7 +41,7 @@ func readInt(path string, fallback int) int {
 	return value
 }
 
-func firstExistingPath(paths ...string) string {
+func FirstExistingPath(paths ...string) string {
 	for _, path := range paths {
 		if _, err := os.Stat(path); err == nil {
 			return path
@@ -50,11 +50,11 @@ func firstExistingPath(paths ...string) string {
 	return ""
 }
 
-func writeString(path string, value string) error {
+func WriteString(path string, value string) error {
 	return os.WriteFile(path, []byte(value), 0o644)
 }
 
-func firstNonEmptyGovernor(cores []model.CPUCore) string {
+func FirstNonEmptyGovernor(cores []model.CPUCore) string {
 	for _, core := range cores {
 		if core.Governor != "" {
 			return core.Governor
@@ -63,7 +63,7 @@ func firstNonEmptyGovernor(cores []model.CPUCore) string {
 	return ""
 }
 
-func firstNonEmptyEPP(cores []model.CPUCore) string {
+func FirstNonEmptyEPP(cores []model.CPUCore) string {
 	for _, core := range cores {
 		if core.EPP != "" {
 			return core.EPP
@@ -72,7 +72,7 @@ func firstNonEmptyEPP(cores []model.CPUCore) string {
 	return ""
 }
 
-func kernelRelease() string {
+func KernelRelease() string {
 	var uname syscall.Utsname
 	if err := syscall.Uname(&uname); err != nil {
 		return ""
@@ -80,7 +80,7 @@ func kernelRelease() string {
 	return int8SliceToString(uname.Release[:])
 }
 
-func machineArch() string {
+func MachineArch() string {
 	var uname syscall.Utsname
 	if err := syscall.Uname(&uname); err != nil {
 		return ""

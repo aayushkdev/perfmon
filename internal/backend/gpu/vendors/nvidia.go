@@ -1,4 +1,4 @@
-package nvidia
+package vendors
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 )
 
 // Enrich attempts to populate NVIDIA GPU fields using nvidia-smi.
-func Enrich(sys, device string, g *model.GPU) error {
+func EnrichNVIDIA(sys, device string, g *model.GPU) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=index,name,utilization.gpu,temperature.gpu,power.draw,clocks.sm", "--format=csv,noheader,nounits")

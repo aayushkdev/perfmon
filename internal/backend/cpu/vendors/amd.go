@@ -1,31 +1,31 @@
-package amd
+package vendors
 
 import (
 	"strings"
 
-	"github.com/aayushkdev/perfmon/internal/backend/cpu"
+	"github.com/aayushkdev/perfmon/internal/backend/cpu/types"
 	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-type Classifier struct{}
+type AMDClassifier struct{}
 
-func New() Classifier {
-	return Classifier{}
+func NewAMD() AMDClassifier {
+	return AMDClassifier{}
 }
 
-func (Classifier) Name() string {
+func (AMDClassifier) Name() string {
 	return "amd"
 }
 
-func (Classifier) Classify(core model.CPUCore, _ cpu.Info) model.CoreType {
-	switch classifyTopologyType(core.TopologyType) {
+func (AMDClassifier) Classify(core model.CPUCore, _ types.Info) model.CoreType {
+	switch classifyAMDTopologyType(core.TopologyType) {
 	case model.CorePerformance, model.CoreEfficiency:
-		return classifyTopologyType(core.TopologyType)
+		return classifyAMDTopologyType(core.TopologyType)
 	}
 	return model.CoreUnknown
 }
 
-func classifyTopologyType(raw string) model.CoreType {
+func classifyAMDTopologyType(raw string) model.CoreType {
 	switch {
 	case strings.Contains(raw, "performance"), raw == "core", strings.Contains(raw, "big"):
 		return model.CorePerformance
@@ -36,7 +36,7 @@ func classifyTopologyType(raw string) model.CoreType {
 	}
 }
 
-func Supports(info cpu.Info) bool {
+func SupportsAMD(info types.Info) bool {
 	vendor := strings.ToLower(info.Vendor)
 	return strings.Contains(vendor, "amd") || strings.Contains(vendor, "authenticamd")
 }

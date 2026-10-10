@@ -31,10 +31,6 @@ func Read(proc, sys string) model.Memory {
 	if swapTotal > swapFree {
 		mem.SwapUsedBytes = swapTotal - swapFree
 	}
-	// PSI removed: do not populate pressure fields
-	// Best-effort: try to detect DIMM/module count and speed from EDAC sysfs
-	// entries (varies by kernel and platform). This is non-fatal — if nothing
-	// is found the fields remain nil.
 	if modules, speed := readMemoryModules(sys); modules > 0 || speed > 0 {
 		if modules > 0 {
 			mem.ModuleCount = &modules
@@ -146,8 +142,6 @@ func readMeminfo(path string) map[string]uint64 {
 	}
 	return values
 }
-
-// PSI support removed. The kernel pressure files are not parsed anymore.
 
 func readString(path string) string {
 	data, err := os.ReadFile(path)

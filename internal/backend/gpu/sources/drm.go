@@ -1,4 +1,4 @@
-package drm
+package sources
 
 import (
 	"os"

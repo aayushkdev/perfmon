@@ -9,9 +9,6 @@ import (
 func Memory(mem model.Memory) string {
 	usedPct := percent(mem.UsedBytes, mem.TotalBytes)
 	swapPct := percent(mem.SwapUsedBytes, mem.SwapTotalBytes)
-	// Note: detailed DIMM/module metadata (count, speed, vendor) is not
-	// available in the current Memory model. Show unavailable where missing
-	// and prioritise a clear header + metadata block followed by usage.
 	lines := []string{
 		fmt.Sprintf("[white::b]%s[-:-:-]", "Memory"),
 		fmt.Sprintf("[silver]total [-] %s", bytes(mem.TotalBytes)),
@@ -31,6 +28,5 @@ func Memory(mem model.Memory) string {
 		fmt.Sprintf("[white]%s[-] used of %s", bytes(mem.SwapUsedBytes), bytes(mem.SwapTotalBytes)),
 		"",
 	)
-	// PSI removed: no pressure information displayed.
 	return strings.Join(lines, "\n")
 }

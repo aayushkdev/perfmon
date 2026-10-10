@@ -1,4 +1,4 @@
-package amd
+package vendors
 
 import (
 	"os"
@@ -10,7 +10,7 @@ import (
 )
 
 // Enrich attempts to read common AMD GPU sysfs attributes to fill metrics.
-func Enrich(sys, device string, g *model.GPU) error {
+func EnrichAMD(sys, device string, g *model.GPU) error {
 	// gpu_busy_percent is sometimes provided by drivers
 	if s, err := os.ReadFile(filepath.Join(device, "gpu_busy_percent")); err == nil {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(string(s)), 64); err == nil {

@@ -249,7 +249,6 @@ func (a *App) build() {
 		a.processTable.Select(row, 0)
 		return tview.MouseConsumed, nil
 	})
-	// processTable placeholder will be populated when rendering
 	a.middlePages = tview.NewPages()
 	a.middlePages.AddPage("cores", a.coreTable, true, true)
 	a.middlePages.AddPage("procs", a.processTable, true, false)
@@ -356,6 +355,3 @@ func (a *App) render(s model.Snapshot) {
 	}
 	a.renderFooter(s, msg)
 }
-
-// renderProcesses populates the processTable. Right now it's a stub that
-// shows a placeholder unless the collector implements a ProcessLister.

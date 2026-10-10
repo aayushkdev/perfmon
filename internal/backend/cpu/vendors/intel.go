@@ -1,4 +1,4 @@
-package intel
+package vendors
 
 import (
 	"os"
@@ -6,27 +6,27 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aayushkdev/perfmon/internal/backend/cpu"
+	"github.com/aayushkdev/perfmon/internal/backend/cpu/types"
 	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-type Classifier struct {
+type IntelClassifier struct {
 	performance map[int]bool
 	efficiency  map[int]bool
 }
 
-func New(sys string) Classifier {
-	return Classifier{
-		performance: readCPUList(filepath.Join(sys, "devices/cpu_core/cpus")),
-		efficiency:  readCPUList(filepath.Join(sys, "devices/cpu_atom/cpus")),
+func NewIntel(sys string) IntelClassifier {
+	return IntelClassifier{
+		performance: readIntelCPUList(filepath.Join(sys, "devices/cpu_core/cpus")),
+		efficiency:  readIntelCPUList(filepath.Join(sys, "devices/cpu_atom/cpus")),
 	}
 }
 
-func (Classifier) Name() string {
+func (IntelClassifier) Name() string {
 	return "intel"
 }
 
-func (c Classifier) Classify(core model.CPUCore, info cpu.Info) model.CoreType {
+func (c IntelClassifier) Classify(core model.CPUCore, info types.Info) model.CoreType {
 	if !strings.Contains(strings.ToLower(info.Vendor), "intel") {
 		return model.CoreUnknown
 	}
@@ -36,22 +36,22 @@ func (c Classifier) Classify(core model.CPUCore, info cpu.Info) model.CoreType {
 	if c.efficiency[core.ID] {
 		return model.CoreEfficiency
 	}
-	switch classifyTopologyType(core.TopologyType) {
+	switch classifyIntelTopologyType(core.TopologyType) {
 	case model.CorePerformance, model.CoreEfficiency:
-		return classifyTopologyType(core.TopologyType)
+		return classifyIntelTopologyType(core.TopologyType)
 	}
 	return model.CoreUnknown
 }
 
-func readCPUList(path string) map[int]bool {
+func readIntelCPUList(path string) map[int]bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	return parseCPUList(strings.TrimSpace(string(data)))
+	return parseIntelCPUList(strings.TrimSpace(string(data)))
 }
 
-func parseCPUList(value string) map[int]bool {
+func parseIntelCPUList(value string) map[int]bool {
 	cpus := map[int]bool{}
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(part)
@@ -59,7 +59,7 @@ func parseCPUList(value string) map[int]bool {
 			continue
 		}
 		if start, end, ok := strings.Cut(part, "-"); ok {
-			addRange(cpus, start, end)
+			addIntelRange(cpus, start, end)
 			continue
 		}
 		id, err := strconv.Atoi(part)
@@ -70,7 +70,7 @@ func parseCPUList(value string) map[int]bool {
 	return cpus
 }
 
-func addRange(cpus map[int]bool, startRaw, endRaw string) {
+func addIntelRange(cpus map[int]bool, startRaw, endRaw string) {
 	start, startErr := strconv.Atoi(strings.TrimSpace(startRaw))
 	end, endErr := strconv.Atoi(strings.TrimSpace(endRaw))
 	if startErr != nil || endErr != nil || end < start {
@@ -81,7 +81,7 @@ func addRange(cpus map[int]bool, startRaw, endRaw string) {
 	}
 }
 
-func classifyTopologyType(raw string) model.CoreType {
+func classifyIntelTopologyType(raw string) model.CoreType {
 	switch {
 	case strings.Contains(raw, "performance"), raw == "core", strings.Contains(raw, "big"):
 		return model.CorePerformance

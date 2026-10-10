@@ -1,16 +1,12 @@
 package cpu
 
-import "github.com/aayushkdev/perfmon/internal/model"
+import (
+	"github.com/aayushkdev/perfmon/internal/backend/cpu/types"
+	"github.com/aayushkdev/perfmon/internal/model"
+)
 
-type Info struct {
-	Vendor string
-	Model  string
-}
-
-type Classifier interface {
-	Name() string
-	Classify(core model.CPUCore, info Info) model.CoreType
-}
+type Info = types.Info
+type Classifier = types.Classifier
 
 func HasHybridHints(cores []model.CPUCore) bool {
 	seen := map[model.CoreType]bool{}

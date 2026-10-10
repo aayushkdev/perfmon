@@ -13,7 +13,6 @@ import (
 )
 
 func Scan(proc string, prevProcJiffies map[int]uint64, prevTotalJiffies uint64) ([]model.Process, map[int]uint64, uint64) {
-	// read total jiffies from /proc/stat
 	data, err := os.ReadFile(filepath.Join(proc, "stat"))
 	if err != nil {
 		return nil, prevProcJiffies, prevTotalJiffies
@@ -30,7 +29,6 @@ func Scan(proc string, prevProcJiffies map[int]uint64, prevTotalJiffies uint64) 
 			break
 		}
 	}
-	// read mem total
 	memTotal := uint64(0)
 	memData, _ := os.ReadFile(filepath.Join(proc, "meminfo"))
 	for _, line := range strings.Split(string(memData), "\n") {
@@ -38,7 +36,6 @@ func Scan(proc string, prevProcJiffies map[int]uint64, prevTotalJiffies uint64) 
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				if v, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
-					// value is in kB
 					memTotal = v * 1024
 				}
 			}
@@ -67,10 +64,8 @@ func Scan(proc string, prevProcJiffies map[int]uint64, prevTotalJiffies uint64) 
 		if !ok {
 			continue
 		}
-		// compute jiffies
 		pj := utime + stime
 		procJiffies[pid] = pj
-		// compute deltas
 		var cpuPct float64
 		if prevTotal := prevTotalJiffies; prevTotal > 0 && totalNow > prevTotal {
 			deltaTotal := float64(totalNow - prevTotal)
@@ -103,7 +98,6 @@ func Scan(proc string, prevProcJiffies map[int]uint64, prevTotalJiffies uint64) 
 			RSSBytes:   rssBytes,
 		})
 	}
-	// sort by memory (RSS) desc by default
 	sort.Slice(procs, func(i, j int) bool { return procs[i].RSSBytes > procs[j].RSSBytes })
 	return procs, procJiffies, totalNow
 }
