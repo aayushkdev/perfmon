@@ -1,15 +1,23 @@
-package backend
+package power
 
 import (
-	"github.com/aayushkdev/perfmon/internal/model"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func (c *Collector) readPowerDomains() []model.PowerDomain {
+type Sample struct {
+	Energy uint64
+	At     time.Time
+}
+
+func Read(sys string, previous map[string]Sample) []model.PowerDomain {
 	domains := make([]model.PowerDomain, 0, 8)
-	matches, _ := filepath.Glob(filepath.Join(c.sys, "class/powercap/intel-rapl:*"))
+	matches, _ := filepath.Glob(filepath.Join(sys, "class/powercap/intel-rapl:*"))
 	for _, base := range matches {
 		energy := readMicroEnergy(filepath.Join(base, "energy_uj"))
 		if energy == nil {
@@ -19,32 +27,32 @@ func (c *Collector) readPowerDomains() []model.PowerDomain {
 		if name == "" {
 			name = filepath.Base(base)
 		}
-		domain := model.PowerDomain{
+		domains = append(domains, model.PowerDomain{
 			Name:      name,
 			Source:    "rapl",
-			PowerW:    c.readRAPLPower(base, energy),
+			PowerW:    raplPower(base, *energy, previous),
 			EnergyJ:   ujToJ(energy),
 			LimitW:    readMicroPower(filepath.Join(base, "constraint_0_power_limit_uw")),
 			MaxW:      readMicroPower(filepath.Join(base, "constraint_0_max_power_uw")),
 			CriticalW: readMicroPower(filepath.Join(base, "constraint_0_crit_power_uw")),
-		}
-		domains = append(domains, domain)
+		})
 	}
 	return domains
 }
 
-// Note: hwmon-based CPU power reading was removed in favor of RAPL-only aggregation.
-
-func (c *Collector) readRAPLPower(base string, energy *uint64) *float64 {
+func raplPower(base string, energy uint64, previous map[string]Sample) *float64 {
 	key := filepath.Base(base)
 	now := time.Now()
-	prev, ok := c.raplPrev[key]
-	c.raplPrev[key] = raplSample{energy: *energy, at: now}
-	if !ok || prev.at.IsZero() || !now.After(prev.at) {
+	prev, ok := previous[key]
+	previous[key] = Sample{Energy: energy, At: now}
+	if !ok || prev.At.IsZero() || !now.After(prev.At) {
 		return nil
 	}
-	delta := uint64Delta(*energy, prev.energy)
-	seconds := now.Sub(prev.at).Seconds()
+	delta := energy
+	if energy >= prev.Energy {
+		delta = energy - prev.Energy
+	}
+	seconds := now.Sub(prev.At).Seconds()
 	if seconds <= 0 {
 		return nil
 	}
@@ -81,13 +89,14 @@ func ujToJ(value *uint64) *float64 {
 	if value == nil {
 		return nil
 	}
-	j := float64(*value) / 1e6
-	return &j
+	joules := float64(*value) / 1e6
+	return &joules
 }
 
-func uint64Delta(cur, prev uint64) uint64 {
-	if cur >= prev {
-		return cur - prev
+func readString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
 	}
-	return cur
+	return strings.TrimSpace(string(data))
 }

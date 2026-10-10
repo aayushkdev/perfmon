@@ -1,9 +1,9 @@
 package backend
 
 import (
+	"github.com/aayushkdev/perfmon/internal/backend/power"
 	"github.com/aayushkdev/perfmon/internal/model"
 	"sync"
-	"time"
 )
 
 type Collector struct {
@@ -11,7 +11,7 @@ type Collector struct {
 	sys      string
 	mu       sync.Mutex
 	prev     map[int]cpuStat
-	raplPrev map[string]raplSample
+	raplPrev map[string]power.Sample
 	// process accounting state
 	prevProcJiffies  map[int]uint64
 	prevTotalJiffies uint64
@@ -26,17 +26,12 @@ type cpuStat struct {
 	total uint64
 }
 
-type raplSample struct {
-	energy uint64
-	at     time.Time
-}
-
 func NewCollector(proc, sys string) *Collector {
 	return &Collector{
 		proc:            proc,
 		sys:             sys,
 		prev:            make(map[int]cpuStat),
-		raplPrev:        make(map[string]raplSample),
+		raplPrev:        make(map[string]power.Sample),
 		prevProcJiffies: make(map[int]uint64),
 	}
 }

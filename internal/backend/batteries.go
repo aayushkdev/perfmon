@@ -104,6 +104,19 @@ func readPowerNowW(base string) *float64 {
 	return nil
 }
 
+func readMicroPower(path string) *float64 {
+	raw := readString(path)
+	if raw == "" {
+		return nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return nil
+	}
+	watts := value / 1e6
+	return &watts
+}
+
 func readVoltageV(base string) *float64 {
 	for _, name := range []string{"voltage_now", "voltage_min_design", "voltage_max_design"} {
 		raw := readString(filepath.Join(base, name))
