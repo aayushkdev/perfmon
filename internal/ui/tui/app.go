@@ -298,7 +298,7 @@ func tablePanel(title string) *tview.Table {
 	table.SetBorderColor(palette.border)
 	table.SetTitle(" " + title + " ")
 	table.SetTitleColor(palette.accent)
-	table.SetSelectedStyle(tcell.StyleDefault.Background(palette.selection).Foreground(palette.text))
+	table.SetSelectedStyle(tcell.StyleDefault.Background(palette.selection).Foreground(palette.selectionText))
 	return table
 }
 
@@ -738,7 +738,7 @@ func (a *App) closeSignalDialog() {
 func buildSignalTable() *tview.Table {
 	table := tview.NewTable().SetSelectable(true, true)
 	table.SetBackgroundColor(palette.panel)
-	table.SetSelectedStyle(tcell.StyleDefault.Background(palette.selection).Foreground(palette.text))
+	table.SetSelectedStyle(tcell.StyleDefault.Background(palette.selection).Foreground(palette.selectionText))
 
 	rows := signalRows()
 	for i, sig := range linuxSignals {
@@ -1529,7 +1529,7 @@ func batteryRate(value *float64, status string, suffix string) string {
 }
 
 func headerCell(text string, active bool) *tview.TableCell {
-	color := palette.muted
+	color := palette.accent
 	style := tcell.StyleDefault.Foreground(color).Background(palette.panel).Bold(true)
 	if active {
 		style = style.Foreground(palette.accent).Underline(true)
