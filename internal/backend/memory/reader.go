@@ -1,21 +1,17 @@
-package backend
+package memory
 
 import (
 	"os"
-
 	"os/exec"
-
 	"path/filepath"
-
 	"strconv"
-
 	"strings"
 
 	"github.com/aayushkdev/perfmon/internal/model"
 )
 
-func (c *Collector) readMemory() model.Memory {
-	values := readMeminfo(filepath.Join(c.proc, "meminfo"))
+func Read(proc, sys string) model.Memory {
+	values := readMeminfo(filepath.Join(proc, "meminfo"))
 	total := values["MemTotal"] * 1024
 	available := values["MemAvailable"] * 1024
 	free := values["MemFree"] * 1024
@@ -39,7 +35,7 @@ func (c *Collector) readMemory() model.Memory {
 	// Best-effort: try to detect DIMM/module count and speed from EDAC sysfs
 	// entries (varies by kernel and platform). This is non-fatal — if nothing
 	// is found the fields remain nil.
-	if modules, speed := c.readMemoryModules(); modules > 0 || speed > 0 {
+	if modules, speed := readMemoryModules(sys); modules > 0 || speed > 0 {
 		if modules > 0 {
 			mem.ModuleCount = &modules
 		}
@@ -48,7 +44,7 @@ func (c *Collector) readMemory() model.Memory {
 		}
 	} else {
 		// If sysfs didn't yield results, try dmidecode as a root-only fallback.
-		if mod, spd := c.dmidecodeFallback(); mod > 0 || spd > 0 {
+		if mod, spd := dmidecodeFallback(); mod > 0 || spd > 0 {
 			if mod > 0 {
 				mem.ModuleCount = &mod
 			}
@@ -64,9 +60,9 @@ func (c *Collector) readMemory() model.Memory {
 // This is intentionally conservative: it reads minimal per-PID data and
 // tolerates permission errors. It keeps previous jiffies to compute deltas.
 
-func (c *Collector) readMemoryModules() (int, int) {
+func readMemoryModules(sys string) (int, int) {
 	// Look for dimm entries under EDAC: devices/system/edac/mc*/csrow*/dimm*
-	pattern := filepath.Join(c.sys, "devices", "system", "edac", "mc*", "csrow*", "dimm*")
+	pattern := filepath.Join(sys, "devices", "system", "edac", "mc*", "csrow*", "dimm*")
 	matches, _ := filepath.Glob(pattern)
 	if len(matches) == 0 {
 		return 0, 0
@@ -102,7 +98,7 @@ func (c *Collector) readMemoryModules() (int, int) {
 // information. It requires root privileges. Returns (moduleCount, speedMHz)
 // or (0,0) on failure.
 
-func (c *Collector) dmidecodeFallback() (int, int) {
+func dmidecodeFallback() (int, int) {
 	out, err := exec.Command("dmidecode", "-t", "17").Output()
 	if err != nil {
 		return 0, 0
@@ -152,3 +148,11 @@ func readMeminfo(path string) map[string]uint64 {
 }
 
 // PSI support removed. The kernel pressure files are not parsed anymore.
+
+func readString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
