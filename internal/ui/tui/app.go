@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aayushkdev/perfmon/internal/backend"
 	"github.com/aayushkdev/perfmon/internal/model"
+	"github.com/aayushkdev/perfmon/internal/ui/tui/render"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"syscall"
@@ -342,13 +343,13 @@ func (a *App) render(s model.Snapshot) {
 		memUsed,
 		s.Timestamp.Format("15:04:05"),
 	))
-	a.cpuPanel.SetText(renderCPU(s.CPU))
+	a.cpuPanel.SetText(render.CPU(s.CPU))
 	a.renderCores(s.CPU.Cores)
 	a.renderProcesses(s)
-	a.memoryPanel.SetText(renderMemory(s.Memory))
-	a.thermalPanel.SetText(renderThermals(s))
-	a.batteryPanel.SetText(renderBattery(s))
-	a.gpuPanel.SetText(renderGPU(s.GPUs))
+	a.memoryPanel.SetText(render.Memory(s.Memory))
+	a.thermalPanel.SetText(render.Thermals(s))
+	a.batteryPanel.SetText(render.Battery(s))
+	a.gpuPanel.SetText(render.GPU(s.GPUs))
 	msg := footerHint
 	if !a.flashUntil.IsZero() && time.Now().Before(a.flashUntil) {
 		msg = a.flashMsg
