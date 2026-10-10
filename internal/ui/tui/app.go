@@ -39,7 +39,6 @@ type App struct {
 	procSort     string          // "mem", "cpu", "pid", "name"
 	procSortAsc  bool            // sort ascending when true, descending when false
 	procList     []model.Process // processes in the order currently displayed
-	allProcList  []model.Process // complete process list used by tree actions
 	procQuery    string          // case-insensitive process filter
 	procSearch   bool            // process search input is active
 	flashMsg     string          // transient footer message (e.g. signal result)
@@ -158,9 +157,6 @@ func (a *App) Run(ctx context.Context) error {
 		case 'K':
 			// force-kill the selected process (SIGKILL)
 			a.signalSelectedProcess(syscall.SIGKILL)
-			return nil
-		case 'X':
-			a.signalSelectedProcessTree(syscall.SIGTERM)
 			return nil
 		case 'e', 'E':
 			a.chooseEPP(ctx)
@@ -365,7 +361,6 @@ func (a *App) renderProcesses(s model.Snapshot) {
 	}
 	a.processTable.Clear()
 	a.procList = nil
-	a.allProcList = nil
 	headers := []string{"PID", "Name", "Command", "CPU%", "MEM"}
 	sortKeys := []string{"pid", "name", "", "cpu", "mem"}
 	_, _, tableWidth, _ := a.processTable.GetInnerRect()
@@ -454,7 +449,6 @@ func (a *App) renderProcesses(s model.Snapshot) {
 		})
 	}
 	procs, treePrefixes := flattenProcessTree(procs)
-	a.allProcList = append([]model.Process(nil), procs...)
 
 	for i := range procs {
 		p := procs[i]
@@ -597,50 +591,6 @@ func signalName(sig syscall.Signal) string {
 	default:
 		return sig.String()
 	}
-}
-
-func (a *App) signalSelectedProcessTree(sig syscall.Signal) {
-	if a.activeMiddle != "procs" {
-		return
-	}
-	row, _ := a.processTable.GetSelection()
-	if row <= 0 || row-1 >= len(a.procList) {
-		a.flashFooter("[yellow]Select a process row first.[-]")
-		return
-	}
-	root := a.procList[row-1]
-	if root.PID <= 1 || root.PID == os.Getpid() {
-		a.flashFooter(fmt.Sprintf("[yellow]Refusing to signal protected PID %d.[-]", root.PID))
-		return
-	}
-	targets := processSubtree(root, a.allProcList)
-	for _, target := range targets {
-		if target.PID <= 1 || target.PID == os.Getpid() {
-			continue
-		}
-		if err := syscall.Kill(target.PID, sig); err != nil {
-			a.flashFooter(fmt.Sprintf("[red]Failed to signal %d (%s): %v[-]", target.PID, fallback(target.Name, "-"), err))
-			return
-		}
-	}
-	a.flashFooter(fmt.Sprintf("[green]Sent %s to %d-process subtree rooted at %d.[-]", signalName(sig), len(targets), root.PID))
-}
-
-func processSubtree(root model.Process, processes []model.Process) []model.Process {
-	children := make(map[int][]model.Process)
-	for _, process := range processes {
-		children[process.PPID] = append(children[process.PPID], process)
-	}
-	var result []model.Process
-	var visit func(model.Process)
-	visit = func(process model.Process) {
-		for _, child := range children[process.PID] {
-			visit(child)
-		}
-		result = append(result, process)
-	}
-	visit(root)
-	return result
 }
 
 func flattenProcessTree(processes []model.Process) ([]model.Process, map[int]string) {
@@ -877,7 +827,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 	}
 	// Mode-specific controls: only advertise what the active view responds to.
 	if a.activeMiddle == "procs" {
-		parts = append(parts, key("/", "search"), key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"), key("X", "tree kill"))
+		parts = append(parts, key("/", "search"), key("c", "sort"), key("s", "dir"), key("k", "term"), key("K", "kill"))
 		parts = append(parts, key("p", "cores"))
 	} else {
 		if a.controls != nil {
