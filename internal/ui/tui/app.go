@@ -182,11 +182,6 @@ func (a *App) Run(ctx context.Context) error {
 			a.toggleSelectedCore(ctx)
 			return nil
 		}
-		if event.Key() == tcell.KeyEsc {
-			cancel()
-			a.app.Stop()
-			return nil
-		}
 		return event
 	})
 
