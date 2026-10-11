@@ -106,7 +106,10 @@ func (a *App) renderProcesses(s model.Snapshot) {
 			return procs[i].RSSBytes > procs[j].RSSBytes
 		})
 	}
-	procs, treePrefixes := flattenProcessTree(procs)
+	var treePrefixes map[int]string
+	if a.procTree {
+		procs, treePrefixes = flattenProcessTree(procs)
+	}
 
 	for i := range procs {
 		p := procs[i]
@@ -210,8 +213,6 @@ func (a *App) cycleProcSort() {
 	default:
 		a.procSort = "pid"
 	}
-	// Every column defaults to descending; press 's' to flip.
-	a.procSortAsc = false
 }
 
 func (a *App) toggleProcSortDir() {

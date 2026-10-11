@@ -34,6 +34,7 @@ type App struct {
 	activeMiddle string          // "cores" or "procs"
 	procSort     string          // "mem", "cpu", "pid", "name"
 	procSortAsc  bool            // sort ascending when true, descending when false
+	procTree     bool            // render the process list as a tree
 	procList     []model.Process // processes in the order currently displayed
 	procQuery    string          // case-insensitive process filter
 	procSearch   bool            // process search input is active
@@ -141,17 +142,24 @@ func (a *App) Run(ctx context.Context) error {
 				a.renderFooter(a.last, "")
 			}
 			return nil
-		case 'c', 'C':
+		case 's', 'S':
 			// cycle process sort order (pid -> name -> cpu -> mem)
 			if a.activeMiddle == "procs" {
 				a.cycleProcSort()
 				go a.refresh(ctx)
 			}
 			return nil
-		case 's', 'S':
+		case 'd', 'D':
 			// toggle ascending/descending for the current sort column
 			if a.activeMiddle == "procs" {
 				a.toggleProcSortDir()
+				go a.refresh(ctx)
+			}
+			return nil
+		case 'v', 'V':
+			// toggle the process list between tree and flat views
+			if a.activeMiddle == "procs" {
+				a.procTree = !a.procTree
 				go a.refresh(ctx)
 			}
 			return nil

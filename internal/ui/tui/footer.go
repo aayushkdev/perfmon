@@ -56,7 +56,7 @@ func (a *App) controlLegend(s model.Snapshot) string {
 	}
 	// Mode-specific controls: only advertise what the active view responds to.
 	if a.activeMiddle == "procs" {
-		parts = append(parts, key("/", "search"), key("c", "sort"), key("s", "dir"), key("⏎", "signal"), key("k", "term"), key("K", "kill"))
+		parts = append(parts, key("/", "search"), key("s", "sort"), key("d", "dir"), key("v", "tree"), key("⏎", "signal"), key("k", "term"), key("K", "kill"))
 		parts = append(parts, key("p", "cores"))
 	} else {
 		if a.controls != nil {
