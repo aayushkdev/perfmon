@@ -239,7 +239,7 @@ func (a *App) signalSelectedProcess(sig syscall.Signal) {
 func (a *App) deliverSignal(p model.Process, sig syscall.Signal) {
 	name := fallback(p.Name, "-")
 	if err := syscall.Kill(p.PID, sig); err != nil {
-		a.flashFooter(fmt.Sprintf("[red]Failed to signal %d (%s): %v[-]", p.PID, name, err))
+		a.flashFooter(actionError(fmt.Sprintf("signal %d (%s)", p.PID, name), err))
 		return
 	}
 	a.flashFooter(fmt.Sprintf("[green]Sent %s to %d (%s).[-]", signalName(sig), p.PID, name))

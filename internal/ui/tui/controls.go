@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/aayushkdev/perfmon/internal/model"
-	"strings"
 )
 
 func (a *App) toggleSelectedCore(ctx context.Context) {
@@ -22,10 +21,6 @@ func (a *App) toggleSelectedCore(ctx context.Context) {
 	action := "online"
 	if !targetOnline {
 		action = "offline"
-	}
-	if !a.controls.CanSetCoreOnline(core.ID) {
-		a.flashFooter(fmt.Sprintf("[yellow]Core %d cannot be toggled on this system.[-]", core.ID))
-		return
 	}
 	go a.applyControl(ctx, fmt.Sprintf("core %d %s", core.ID, action), func(runCtx context.Context) error {
 		return a.controls.SetCoreOnline(runCtx, core.ID, targetOnline)
@@ -90,7 +85,7 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 	err := fn(ctx)
 	if err != nil {
 		a.app.QueueUpdateDraw(func() {
-			a.flashFooter(fmt.Sprintf("[red]Failed to set %s: %s[-]", label, compactControlError(err)))
+			a.flashFooter(actionError("set "+label, err))
 		})
 		return
 	}
@@ -98,15 +93,6 @@ func (a *App) applyControl(ctx context.Context, label string, fn func(context.Co
 		a.flashFooter(fmt.Sprintf("[green]Set %s.[-]", label))
 	})
 	a.refresh(ctx)
-}
-
-func compactControlError(err error) string {
-	message := strings.Join(strings.Fields(err.Error()), " ")
-	const maxLength = 112
-	if len(message) > maxLength {
-		return message[:maxLength-3] + "..."
-	}
-	return message
 }
 
 func nextValue(current string, options []string) string {

@@ -34,7 +34,11 @@ func (c *Controller) SetCoreOnline(ctx context.Context, id int, online bool) err
 		return errors.New("cpu0 cannot be offlined safely")
 	}
 	path := c.coreOnlinePath(id)
-	if !c.CanSetCoreOnline(id) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	if err != nil || info.IsDir() {
 		return fmt.Errorf("core %d online control is unavailable", id)
 	}
 	value := "0"
@@ -94,12 +98,16 @@ func (c *Controller) SetTurboEnabled(ctx context.Context, enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var writeErr error
 	for _, path := range []string{
 		filepath.Join(c.Sys, "devices/system/cpu/intel_pstate/no_turbo"),
 		filepath.Join(c.Sys, "devices/system/cpu/amd_pstate/no_turbo"),
 		filepath.Join(c.Sys, "devices/system/cpu/cpufreq/boost"),
 	} {
 		if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				writeErr = err
+			}
 			continue
 		}
 		value := "0"
@@ -114,7 +122,12 @@ func (c *Controller) SetTurboEnabled(ctx context.Context, enabled bool) error {
 		}
 		if err := fs.WriteString(path, value); err == nil {
 			return nil
+		} else if writeErr == nil || errors.Is(err, os.ErrPermission) {
+			writeErr = err
 		}
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	return errors.New("turbo control is unavailable")
 }
