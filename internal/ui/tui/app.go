@@ -237,6 +237,25 @@ func (a *App) build() {
 	a.status = textPanel("", false)
 
 	a.coreTable = tablePanel("Cores")
+	a.coreTable.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseScrollUp && action != tview.MouseScrollDown {
+			return action, event
+		}
+		row, _ := a.coreTable.GetSelection()
+		if action == tview.MouseScrollUp {
+			row--
+		} else {
+			row++
+		}
+		if row < 1 {
+			row = 1
+		}
+		if len(a.last.CPU.Cores) > 0 && row > len(a.last.CPU.Cores) {
+			row = len(a.last.CPU.Cores)
+		}
+		a.coreTable.Select(row, 0)
+		return tview.MouseConsumed, nil
+	})
 	a.processTable = tablePanel("Processes")
 	a.processTable.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		if action != tview.MouseScrollUp && action != tview.MouseScrollDown {
